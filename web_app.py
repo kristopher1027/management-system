@@ -1,8 +1,14 @@
 """A small browser interface for the Learn2Earn resource manager."""
 from copy import deepcopy
+import hashlib
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
+import secrets
+import tempfile
 from threading import RLock
+import time
 from urllib.parse import urlparse
 
 import main as inventory
@@ -10,6 +16,12 @@ import main as inventory
 HOST = "127.0.0.1"
 PORT = 8000
 LOCK = RLock()
+AUTH_FILE = "auth.json"
+SESSION_COOKIE = "learn2earn_session"
+SESSION_TTL = 8 * 60 * 60
+PASSWORD_ROUNDS = 310_000
+users = {}
+sessions = {}
 
 PAGE = r'''<!doctype html>
 <html lang="en">
@@ -20,17 +32,19 @@ PAGE = r'''<!doctype html>
   <title>Learn2Earn · Resource desk</title>
   <style>
     :root{color-scheme:light;--ink:#182538;--muted:#718096;--line:#e6eaf0;--paper:#fff;--wash:#f4f6fa;--navy:#101b2d;--blue:#536dfe;--green:#16866a;--amber:#b66a12;--red:#bb4052;--shadow:0 12px 30px #17233a0b}
-    *{box-sizing:border-box}body{margin:0;background:var(--wash);color:var(--ink);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}button,input,select{font:inherit}button{cursor:pointer}
+    *{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:var(--wash);color:var(--ink);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}button,input,select{font:inherit}button{cursor:pointer}
     .shell{min-height:100vh}.topbar{height:72px;background:var(--navy);color:white;display:flex;align-items:center;justify-content:space-between;padding:0 max(24px,calc((100vw - 1320px)/2));gap:18px}.brand{display:flex;align-items:center;gap:12px;font-weight:700;letter-spacing:.01em}.brand-mark{height:36px;width:36px;border-radius:11px;background:#526dff;display:grid;place-items:center;font-size:18px}.brand small{display:block;color:#aab6ca;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase}.top-right{display:flex;align-items:center;gap:10px;color:#c2ccda;font-size:13px}.live{height:8px;width:8px;background:#42d3a5;border-radius:50%;box-shadow:0 0 0 4px #42d3a522}
     main{max-width:1320px;margin:auto;padding:36px 24px 60px}.heading{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;margin-bottom:26px}.eyebrow{color:var(--blue);font-weight:700;text-transform:uppercase;letter-spacing:.12em;font-size:11px}.heading h1{font-size:30px;line-height:1.2;margin:7px 0}.heading p{color:var(--muted);margin:0}.today{color:var(--muted);font-size:13px;white-space:nowrap}
     .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:22px}.stat,.panel{background:var(--paper);border:1px solid var(--line);border-radius:15px;box-shadow:var(--shadow)}.stat{padding:19px 20px;position:relative;overflow:hidden}.stat:after{content:"";position:absolute;width:64px;height:64px;border-radius:50%;right:-18px;top:-20px;background:#536dfe0b}.stat-label{font-size:12px;color:var(--muted);font-weight:600}.stat-value{font-size:27px;font-weight:750;letter-spacing:-.04em;margin-top:7px}.stat-foot{font-size:11px;color:#99a3b2;margin-top:2px}
     .layout{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px;align-items:start}.panel{padding:21px}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:17px}.panel-head h2{font-size:17px;margin:0;letter-spacing:-.02em}.subtle{color:var(--muted);font-size:12px;margin-top:3px}.actions{display:flex;gap:9px;align-items:center}.search{width:205px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:#fff;outline:none}.search:focus,input:focus,select:focus{border-color:#8997ff;box-shadow:0 0 0 3px #536dfe19;outline:none}.btn{border:0;border-radius:9px;background:var(--blue);color:#fff;font-weight:650;padding:10px 14px;box-shadow:0 4px 10px #536dfe25}.btn:hover{background:#4059e8}.btn.secondary{background:#f0f2ff;color:#4059e8;box-shadow:none}.btn.secondary:hover{background:#e5e9ff}.btn.full{width:100%;margin-top:4px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;white-space:nowrap}th{text-align:left;color:#8a95a5;font-size:10px;text-transform:uppercase;letter-spacing:.09em;padding:11px 10px;border-bottom:1px solid var(--line)}td{padding:13px 10px;border-bottom:1px solid #eff1f5;font-size:13px}tbody tr:last-child td{border-bottom:0}.resource-name{font-weight:650}.resource-id{color:#97a1af;font-size:11px;margin-top:2px}.badge{display:inline-flex;align-items:center;gap:6px;border-radius:99px;padding:4px 8px;font-size:11px;font-weight:650;background:#eaf7f2;color:var(--green)}.badge:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.badge.low{background:#fff4e6;color:var(--amber)}.badge.out{background:#fff0f1;color:var(--red)}.empty{text-align:center;padding:32px;color:var(--muted)}
-    .side{display:grid;gap:16px}.form-panel h2{font-size:16px;margin:0}.form-panel .subtle{margin-bottom:16px}.tabs{display:flex;background:#f1f3f8;padding:4px;border-radius:10px;margin-bottom:17px}.tab{border:0;background:transparent;border-radius:7px;flex:1;padding:8px;color:var(--muted);font-weight:650;font-size:12px}.tab.active{color:var(--ink);background:#fff;box-shadow:0 1px 4px #14213d13}.field{margin-bottom:12px}.field label{display:block;font-size:11px;color:#5c697b;font-weight:650;margin-bottom:5px}.field input,.field select{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 11px;background:#fff;color:var(--ink)}.form-message{min-height:18px;margin-top:10px;font-size:12px;color:var(--green)}.form-message.error{color:var(--red)}.loan-list{display:grid;gap:11px}.loan-row{display:flex;justify-content:space-between;gap:10px;align-items:center;border-bottom:1px solid #eff1f5;padding-bottom:10px}.loan-row:last-child{border:0;padding:0}.loan-who{font-size:12px;font-weight:650}.loan-what{font-size:11px;color:var(--muted)}.loan-count{font-weight:700;font-size:12px;color:#394c69;white-space:nowrap}.toast{position:fixed;right:22px;bottom:22px;background:#182538;color:#fff;padding:12px 16px;border-radius:10px;box-shadow:var(--shadow);opacity:0;transform:translateY(10px);transition:.2s;pointer-events:none}.toast.show{opacity:1;transform:none}.footnote{margin-top:17px;color:#9aa4b2;font-size:11px;text-align:center}
+    .side{display:grid;gap:16px}.form-panel h2{font-size:16px;margin:0}.form-panel .subtle{margin-bottom:16px}.tabs{display:flex;background:#f1f3f8;padding:4px;border-radius:10px;margin-bottom:17px}.tab{border:0;background:transparent;border-radius:7px;flex:1;padding:8px;color:var(--muted);font-weight:650;font-size:12px}.tab.active{color:var(--ink);background:#fff;box-shadow:0 1px 4px #14213d13}.field{margin-bottom:12px}.field label{display:block;font-size:11px;color:#5c697b;font-weight:650;margin-bottom:5px}.field input,.field select{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 11px;background:#fff;color:var(--ink)}.form-message{min-height:18px;margin-top:10px;font-size:12px;color:var(--green)}.form-message.error{color:var(--red)}.loan-list{display:grid;gap:11px}.loan-row{display:flex;justify-content:space-between;gap:10px;align-items:center;border-bottom:1px solid #eff1f5;padding-bottom:10px}.loan-row:last-child{border:0;padding:0}.loan-who{font-size:12px;font-weight:650}.loan-what{font-size:11px;color:var(--muted)}.loan-count{font-weight:700;font-size:12px;color:#394c69;white-space:nowrap}.toast{position:fixed;right:22px;bottom:22px;background:#182538;color:#fff;padding:12px 16px;border-radius:10px;box-shadow:var(--shadow);opacity:0;transform:translateY(10px);transition:.2s;pointer-events:none}.toast.show{opacity:1;transform:none}.footnote{margin-top:17px;color:#9aa4b2;font-size:11px;text-align:center}.auth-screen{min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(ellipse at 18% 12%,#263963 0,transparent 42%),var(--navy)}.auth-card{width:min(430px,100%);background:white;border-radius:19px;padding:34px;box-shadow:0 25px 80px #0004}.auth-brand{display:flex;align-items:center;gap:11px;font-weight:750;margin-bottom:27px}.auth-card h1{font-size:25px;margin:0;letter-spacing:-.04em}.auth-card>p{color:var(--muted);margin:6px 0 22px;font-size:13px}.auth-tabs{margin-bottom:20px}.auth-card .field{margin-bottom:14px}.auth-error{color:var(--red);font-size:12px;min-height:18px;margin:10px 0}.account-name{color:white;font-size:12px}.logout{border:1px solid #ffffff35;color:white;background:transparent;border-radius:8px;padding:7px 10px;font-size:12px}.logout:hover{background:#ffffff14}
     @media(max-width:940px){.layout{grid-template-columns:1fr}.side{grid-template-columns:repeat(2,minmax(0,1fr))}.stats{grid-template-columns:repeat(2,1fr)}}@media(max-width:600px){.topbar{height:62px;padding:0 17px}.top-right .status-text{display:none}main{padding:25px 14px 40px}.heading{align-items:flex-start;flex-direction:column}.heading h1{font-size:26px}.today{display:none}.stats{gap:10px}.stat{padding:15px}.stat-value{font-size:24px}.layout{gap:13px}.panel{padding:16px}.panel-head{align-items:flex-start;flex-direction:column}.actions,.search{width:100%}.side{grid-template-columns:1fr}th,td{padding-left:7px;padding-right:7px}}
   </style>
 </head>
 <body><div class="shell">
-  <header class="topbar"><div class="brand"><div class="brand-mark">✳</div><div>Learn2Earn<small>Campus resource desk</small></div></div><div class="top-right"><span class="live"></span><span class="status-text">Inventory system online</span></div></header>
+  <section class="auth-screen" id="authScreen"><div class="auth-card"><div class="auth-brand"><div class="brand-mark">✳</div><div>Learn2Earn<small style="display:block;color:#718096;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase">Campus resource desk</small></div></div><h1 id="authTitle">Welcome back</h1><p id="authSubtitle">Sign in to manage campus equipment and loans.</p><div class="tabs auth-tabs"><button class="tab active" type="button" data-auth-mode="login">Sign in</button><button class="tab" type="button" data-auth-mode="register">Create account</button></div><form id="authForm"><div class="field" id="nameField" hidden><label for="authName">Your name</label><input id="authName" autocomplete="name" maxlength="80"></div><div class="field"><label for="authUsername">Username</label><input id="authUsername" autocomplete="username" minlength="3" maxlength="40" required></div><div class="field"><label for="authPassword">Password</label><input id="authPassword" type="password" autocomplete="current-password" minlength="10" required></div><button class="btn full" type="submit" id="authSubmit">Sign in</button><div class="auth-error" id="authError" role="alert"></div></form><div class="subtle">Your account is stored on this computer.</div></div></section>
+  <div id="appScreen" hidden>
+  <header class="topbar"><div class="brand"><div class="brand-mark">✳</div><div>Learn2Earn<small>Campus resource desk</small></div></div><div class="top-right"><span class="live"></span><span class="status-text">Inventory system online</span><span class="account-name" id="accountName"></span><button class="logout" id="logoutButton">Sign out</button></div></header>
   <main>
     <section class="heading"><div><div class="eyebrow">Operations overview</div><h1>Resource desk</h1><p>Keep track of campus equipment and active loans.</p></div><div class="today" id="today"></div></section>
     <section class="stats" aria-label="Inventory summary"><article class="stat"><div class="stat-label">Total equipment</div><div class="stat-value" id="totalUnits">—</div><div class="stat-foot">units across all resources</div></article><article class="stat"><div class="stat-label">Ready to borrow</div><div class="stat-value" id="availableUnits">—</div><div class="stat-foot">currently available units</div></article><article class="stat"><div class="stat-label">On loan</div><div class="stat-value" id="borrowedUnits">—</div><div class="stat-foot">units with fellows</div></article><article class="stat"><div class="stat-label">Resource types</div><div class="stat-value" id="resourceCount">—</div><div class="stat-foot">items in your catalog</div></article></section>
@@ -56,12 +70,58 @@ PAGE = r'''<!doctype html>
       const loans=state.loans;$('#loanList').innerHTML=loans.length?loans.map(l=>`<div class="loan-row"><div><div class="loan-who">${esc(l.fellow_name)}</div><div class="loan-what">${esc(l.resource_name)}</div></div><div class="loan-count">${l.quantity} unit${l.quantity===1?'':'s'}</div></div>`).join(''):'<div class="empty" style="padding:15px 0">Nothing is currently on loan.</div>';
     }
     async function refresh(){state=await api('/api/state');render()}
-    $('#search').addEventListener('input',render);document.querySelectorAll('.tab').forEach(tab=>tab.addEventListener('click',()=>{mode=tab.dataset.mode;document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t===tab));$('#transactionMessage').textContent='';render()}));$('#fellow').addEventListener('change',render);
+    $('#search').addEventListener('input',render);document.querySelectorAll('.tab[data-mode]').forEach(tab=>tab.addEventListener('click',()=>{mode=tab.dataset.mode;document.querySelectorAll('.tab[data-mode]').forEach(t=>t.classList.toggle('active',t===tab));$('#transactionMessage').textContent='';render()}));$('#fellow').addEventListener('change',render);
     $('#transactionForm').addEventListener('submit',async event=>{event.preventDefault();const message=$('#transactionMessage');message.className='form-message';message.textContent='';try{const result=await api('/api/'+mode,{fellow_id:$('#fellow').value,resource_id:$('#resource').value,quantity:Number($('#quantity').value)});message.textContent=result.message;await refresh();showToast(result.message)}catch(error){message.classList.add('error');message.textContent=error.message}});
     $('#addButton').addEventListener('click',()=>{$('#addMessage').textContent='';$('#addDialog').showModal()});$('#cancelAdd').addEventListener('click',()=>$('#addDialog').close());$('#addForm').addEventListener('submit',async event=>{event.preventDefault();const message=$('#addMessage');message.className='form-message';message.textContent='';try{const result=await api('/api/resources',{id:$('#newId').value,name:$('#newName').value,category:$('#newCategory').value,total:Number($('#newTotal').value)});$('#addDialog').close();event.target.reset();$('#newTotal').value='1';await refresh();showToast(result.message)}catch(error){message.classList.add('error');message.textContent=error.message}});
-    refresh().catch(error=>showToast(error.message));setInterval(()=>refresh().catch(()=>{}),30000);
+    let authMode='login';
+    function setAuthMode(next){authMode=next;const registering=next==='register';$('#authTitle').textContent=registering?'Create your account':'Welcome back';$('#authSubtitle').textContent=registering?'Register to manage campus equipment and loans.':'Sign in to manage campus equipment and loans.';$('#nameField').hidden=!registering;$('#authName').required=registering;$('#authPassword').autocomplete=registering?'new-password':'current-password';$('#authSubmit').textContent=registering?'Create account':'Sign in';document.querySelectorAll('[data-auth-mode]').forEach(tab=>tab.classList.toggle('active',tab.dataset.authMode===next));$('#authError').textContent=''}
+    function showApp(name){$('#accountName').textContent=name;$('#authScreen').hidden=true;$('#appScreen').hidden=false;refresh().catch(error=>showToast(error.message))}
+    document.querySelectorAll('[data-auth-mode]').forEach(tab=>tab.addEventListener('click',()=>setAuthMode(tab.dataset.authMode)));
+    $('#authForm').addEventListener('submit',async event=>{event.preventDefault();const errorBox=$('#authError');errorBox.textContent='';const payload={username:$('#authUsername').value,password:$('#authPassword').value};if(authMode==='register')payload.name=$('#authName').value;try{const result=await api('/api/'+(authMode==='register'?'register':'login'),payload);event.target.reset();showApp(result.name)}catch(error){errorBox.textContent=error.message}});
+    $('#logoutButton').addEventListener('click',async()=>{try{await api('/api/logout',{});$('#appScreen').hidden=true;$('#authScreen').hidden=false;$('#authPassword').value='';setAuthMode('login')}catch(error){showToast(error.message)}});
+    api('/api/me').then(me=>{if(me.authenticated)showApp(me.name)}).catch(error=>showToast(error.message));setInterval(()=>{if(!$('#appScreen').hidden)refresh().catch(()=>{})},30000);
   </script>
-</div></body></html>'''
+</div></div></body></html>'''
+
+
+def save_users():
+    """Atomically write user password hashes to the local auth file."""
+    path = os.path.abspath(AUTH_FILE)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=os.path.dirname(path),
+                                         delete=False) as f:
+            temp_path = f.name
+            json.dump({"users": users}, f, indent=2)
+            f.write("\n")
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def load_users():
+    """Load account hashes; refuse to overwrite an unreadable account file."""
+    try:
+        with open(AUTH_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+    except FileNotFoundError:
+        return
+    if not isinstance(saved, dict) or not isinstance(saved.get("users"), dict):
+        raise RuntimeError("auth.json has an invalid format; account data was not loaded.")
+    for username, user in saved["users"].items():
+        if (not isinstance(username, str) or not isinstance(user, dict)
+                or not isinstance(user.get("name"), str)
+                or not isinstance(user.get("salt"), str)
+                or not isinstance(user.get("password_hash"), str)):
+            raise RuntimeError("auth.json has an invalid account record.")
+        try:
+            salt, digest = bytes.fromhex(user["salt"]), bytes.fromhex(user["password_hash"])
+        except ValueError as error:
+            raise RuntimeError("auth.json contains an invalid password hash.") from error
+        if len(salt) != 16 or len(digest) != 32:
+            raise RuntimeError("auth.json contains an invalid password hash.")
+    users.update(saved["users"])
 
 
 def snapshot():
@@ -92,13 +152,15 @@ def snapshot():
 class Handler(BaseHTTPRequestHandler):
     server_version = "Learn2Earn/1.0"
 
-    def respond(self, status, payload, content_type="application/json; charset=utf-8"):
+    def respond(self, status, payload, content_type="application/json; charset=utf-8", headers=None):
         body = payload.encode("utf-8") if isinstance(payload, str) else json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -122,12 +184,56 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, PAGE, "text/html; charset=utf-8")
         elif path == "/api/state":
             with LOCK:
+                if not self.current_user():
+                    self.respond(401, {"error": "Please sign in to continue."})
+                    return
                 self.respond(200, snapshot())
+        elif path == "/api/me":
+            with LOCK:
+                username = self.current_user()
+                self.respond(200, {"authenticated": bool(username),
+                                   "name": users[username]["name"] if username else ""})
         else:
             self.respond(404, {"error": "Page not found."})
 
+    def current_user(self):
+        """Return the active username and extend its inactivity timeout."""
+        from http.cookies import SimpleCookie
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+            token = cookie[SESSION_COOKIE].value
+        except Exception:
+            return None
+        session = sessions.get(token)
+        now = time.time()
+        if not session or session["expires"] < now:
+            sessions.pop(token, None)
+            return None
+        session["expires"] = now + SESSION_TTL
+        return session["username"]
+
+    def set_session(self, username):
+        token = secrets.token_urlsafe(32)
+        sessions[token] = {"username": username, "expires": time.time() + SESSION_TTL}
+        return f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}"
+
+    def clear_session(self):
+        from http.cookies import SimpleCookie
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+            token = cookie[SESSION_COOKIE].value
+            sessions.pop(token, None)
+        except Exception:
+            pass
+        return f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+
     def do_POST(self):
         path = urlparse(self.path).path
+        if path in ("/api/register", "/api/login", "/api/logout"):
+            self.handle_auth(path)
+            return
         if path not in ("/api/resources", "/api/borrow", "/api/return"):
             self.respond(404, {"error": "Action not found."})
             return
@@ -144,6 +250,9 @@ class Handler(BaseHTTPRequestHandler):
                 if type(data.get("quantity")) is not int:
                     raise ValueError("Quantity must be a whole number.")
             with LOCK:
+                if not self.current_user():
+                    self.respond(401, {"error": "Your session expired. Please sign in again."})
+                    return
                 before_resources = deepcopy(inventory.resources)
                 before_records = deepcopy(inventory.borrow_records)
                 if path == "/api/resources":
@@ -173,11 +282,66 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as error:
             self.respond(400, {"error": str(error)})
 
+    def handle_auth(self, path):
+        try:
+            data = self.read_json()
+            with LOCK:
+                if path == "/api/logout":
+                    cookie = self.clear_session()
+                    self.respond(200, {"message": "You have been signed out."}, headers={"Set-Cookie": cookie})
+                    return
+
+                username = data.get("username", "")
+                password = data.get("password", "")
+                if not isinstance(username, str) or not isinstance(password, str):
+                    raise ValueError("Enter a username and password.")
+                username = username.strip().lower()
+                if path == "/api/register":
+                    name = data.get("name", "")
+                    if not isinstance(name, str) or not name.strip():
+                        raise ValueError("Enter your name.")
+                    if len(name.strip()) > 80:
+                        raise ValueError("Your name must be 80 characters or fewer.")
+                    if len(username) < 3 or len(username) > 40 or not all(
+                            char.isalnum() or char in "._-" for char in username):
+                        raise ValueError("Username must be 3–40 characters and use letters, numbers, dots, dashes or underscores.")
+                    if len(password) < 10:
+                        raise ValueError("Use a password with at least 10 characters.")
+                    if username in users:
+                        self.respond(409, {"error": "That username is already registered."})
+                        return
+                    salt = secrets.token_bytes(16)
+                    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_ROUNDS)
+                    users[username] = {"name": name.strip(), "salt": salt.hex(), "password_hash": digest.hex()}
+                    try:
+                        save_users()
+                    except OSError as error:
+                        users.pop(username, None)
+                        self.respond(500, {"error": f"Could not save your account: {error}"})
+                        return
+                else:
+                    user = users.get(username)
+                    if not user:
+                        self.respond(401, {"error": "Username or password is incorrect."})
+                        return
+                    expected = bytes.fromhex(user["password_hash"])
+                    actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                                  bytes.fromhex(user["salt"]), PASSWORD_ROUNDS)
+                    if not hmac.compare_digest(actual, expected):
+                        self.respond(401, {"error": "Username or password is incorrect."})
+                        return
+                cookie = self.set_session(username)
+                self.respond(200, {"message": "Signed in.", "name": users[username]["name"]},
+                             headers={"Set-Cookie": cookie})
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
+
     def log_message(self, fmt, *args):
         print("%s - %s" % (self.address_string(), fmt % args))
 
 
 def main():
+    load_users()
     inventory.load_data()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"Learn2Earn is running at http://{HOST}:{PORT}")

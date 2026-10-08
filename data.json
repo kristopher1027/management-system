@@ -27,6 +27,13 @@
       "category": "accessories",
       "total": 3,
       "available": 3
+    },
+    {
+      "id": "R005",
+      "name": "charger",
+      "category": "accessories",
+      "total": 10,
+      "available": 8
     }
   ],
   "borrow_records": [
@@ -40,6 +47,12 @@
       "fellow_id": "F002",
       "resource_id": "R001",
       "quantity": 5,
+      "type": "borrow"
+    },
+    {
+      "fellow_id": "F002",
+      "resource_id": "R005",
+      "quantity": 2,
       "type": "borrow"
     }
   ]

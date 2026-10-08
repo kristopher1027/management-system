@@ -16,5 +16,9 @@ Then open <http://127.0.0.1:8000> in your browser. Press `Ctrl+C` in the
 terminal to stop the server. The classic command-line program is still
 available with `python3 main.py`.
 
+Use **Create account** on the sign-in screen to register. Usernames and
+password hashes are stored in `auth.json`; passwords are never saved as plain
+text. Accounts currently share the same access to the inventory.
+
 The web server listens on the local computer only. Hosting this for a campus
-or public network requires deployment configuration and user authentication.
+or public network requires deployment configuration and account administration.
