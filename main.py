@@ -1,5 +1,7 @@
 # Learn2Earn Campus Resource Management System (standard library only)
 import json
+import os
+import tempfile
 
 resources = [
     {"id": "R001", "name": "Laptop", "category": "Electronics", "total": 10, "available": 10},
@@ -13,10 +15,66 @@ DATA_FILE = "data.json"
 
 
 def save_data():
-    """Write inventory and loan records to a JSON file."""
+    """Write inventory and loan records safely, without leaving half a file."""
     data = {"resources": resources, "borrow_records": borrow_records}
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    directory = os.path.dirname(os.path.abspath(DATA_FILE))
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=directory,
+                                         delete=False) as f:
+            temp_path = f.name
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(temp_path, DATA_FILE)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def valid_saved_data(data):
+    """Check saved values before allowing them to replace the live inventory."""
+    if not isinstance(data, dict):
+        return False
+    saved_resources = data.get("resources")
+    records = data.get("borrow_records")
+    if not isinstance(saved_resources, list) or not isinstance(records, list):
+        return False
+
+    ids = set()
+    balances = {}
+    for item in saved_resources:
+        if not isinstance(item, dict) or not all(
+                key in item for key in ("id", "name", "category", "total", "available")):
+            return False
+        rid = item["id"]
+        if (not isinstance(rid, str) or not rid or rid != rid.upper()
+                or rid in ids or not isinstance(item["name"], str)
+                or not isinstance(item["category"], str)
+                or type(item["total"]) is not int or item["total"] <= 0
+                or type(item["available"]) is not int
+                or not 0 <= item["available"] <= item["total"]):
+            return False
+        ids.add(rid)
+        balances[rid] = {}
+
+    for record in records:
+        if not isinstance(record, dict) or not all(
+                key in record for key in ("fellow_id", "resource_id", "quantity", "type")):
+            return False
+        fid, rid = record["fellow_id"], record["resource_id"]
+        qty, kind = record["quantity"], record["type"]
+        if (not isinstance(fid, str) or not isinstance(rid, str)
+                or fid not in fellows or rid not in ids
+                or type(qty) is not int or qty <= 0
+                or kind not in ("borrow", "return")):
+            return False
+        person_balances = balances[rid]
+        person_balances[fid] = person_balances.get(fid, 0) + (qty if kind == "borrow" else -qty)
+        if person_balances[fid] < 0:
+            return False
+
+    return all(item["available"] == item["total"] - sum(balances[item["id"]].values())
+               for item in saved_resources)
 
 
 def load_data():
@@ -31,8 +89,7 @@ def load_data():
         return
     # Validate the top-level shape before replacing the defaults. A malformed
     # file should not leave the application in a broken state.
-    if not isinstance(data, dict) or not isinstance(data.get("resources"), list) \
-            or not isinstance(data.get("borrow_records"), list):
+    if not valid_saved_data(data):
         print("Saved file has an invalid format. Starting with default data.")
         return
     resources[:] = data["resources"]
@@ -69,7 +126,7 @@ def add_resource(resource_id, name, category, total):
         return False, "ID, name and category cannot be empty."
     if find_resource(resource_id) is not None:
         return False, f"Resource ID {resource_id} already exists."
-    if not isinstance(total, int) or total <= 0:
+    if type(total) is not int or total <= 0:
         return False, "Total units must be a positive whole number."
 
     resources.append({
@@ -102,7 +159,7 @@ def borrow(fellow_id, resource_id, quantity):
     if resource is None:
         return False, f"Unknown resource ID: {resource_id}"
 
-    if not isinstance(quantity, int) or quantity <= 0:
+    if type(quantity) is not int or quantity <= 0:
         return False, "Quantity must be a positive whole number."
 
     if quantity > resource["available"]:
@@ -130,7 +187,7 @@ def return_item(fellow_id, resource_id, quantity):
     if resource is None:
         return False, f"Unknown resource ID: {resource_id}"
 
-    if not isinstance(quantity, int) or quantity <= 0:
+    if type(quantity) is not int or quantity <= 0:
         return False, "Quantity must be a positive whole number."
 
     held = outstanding(fellow_id, resource_id)
@@ -211,11 +268,18 @@ def read_text(prompt):
         print("This cannot be empty.")
 
 
-def run_demo():
+def persist_changes():
+    """Report storage errors without abruptly closing the interactive menu."""
+    try:
+        save_data()
+    except OSError as error:
+        print(f"Could not save data: {error}")
+
+
+def _run_demo_steps():
     print("Step 1: F001 borrows 2 laptops")
     print(borrow("F001", "R001", 2)[1])
     print("Laptop available:", find_resource("R001")["available"])
-
     print("\nStep 2: F002 borrows 3 keyboards")
     print(borrow("F002", "R002", 3)[1])
     print("Keyboard available:", find_resource("R002")["available"])
@@ -244,6 +308,17 @@ def run_demo():
     print("Laptop available:", find_resource("R001")["available"])
 
 
+def run_demo():
+    """Show the sample workflow without changing the real inventory."""
+    original_resources = [resource.copy() for resource in resources]
+    original_records = [record.copy() for record in borrow_records]
+    try:
+        _run_demo_steps()
+    finally:
+        resources[:] = original_resources
+        borrow_records[:] = original_records
+
+
 def menu():
     while True:
         print("\n=== Learn2Earn Resource Manager ===")
@@ -256,7 +331,11 @@ def menu():
         print("7. Report")
         print("8. Run required demo")
         print("0. Exit")
-        choice = input("Choose an option: ").strip()
+        try:
+            choice = input("Choose an option: ").strip()
+        except EOFError:
+            print("\nGoodbye!")
+            break
 
         if choice == "1":
             list_resources()
@@ -268,7 +347,7 @@ def menu():
             success, message = add_resource(rid, name, category, total)
             print(message)
             if success:
-                save_data()
+                persist_changes()
         elif choice == "3":
             fid = read_text("Fellow ID: ").upper()
             rid = read_text("Resource ID: ").upper()
@@ -276,7 +355,7 @@ def menu():
             success, message = borrow(fid, rid, qty)
             print(message)
             if success:
-                save_data()
+                persist_changes()
         elif choice == "4":
             fid = read_text("Fellow ID: ").upper()
             rid = read_text("Resource ID: ").upper()
@@ -284,7 +363,7 @@ def menu():
             success, message = return_item(fid, rid, qty)
             print(message)
             if success:
-                save_data()
+                persist_changes()
         elif choice == "5":
             matches = search_by_name(read_text("Name to search: "))
             if not matches:
