@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Inventory · ResourceHub{% endblock %}
+
+{% block page_class %}inventory-page{% endblock %}
+
+{% block content %}
+  <section class="inventory-page">
+    <div class="page-heading">
+      <p class="eyebrow">RESOURCE CATALOG</p>
+      <h1>Equipment inventory</h1>
+      <p>Browse equipment and check what is ready to borrow.</p>
+    </div>
+
+    <section class="inventory-panel" aria-label="Resource inventory">
+      <form class="inventory-filters" action="{{ url_for('inventory_page') }}" method="get">
+        <label class="filter-search">
+          <span>Search by name</span>
+          <input type="search" name="q" value="{{ search_text }}" placeholder="For example, laptop">
+        </label>
+        <label class="filter-category">
+          <span>Category</span>
+          <select name="category">
+            <option value="">All categories</option>
+            {% for category in categories %}
+              <option value="{{ category }}" {% if category|lower == selected_category|lower %}selected{% endif %}>{{ category }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button class="button-primary" type="submit">Filter inventory</button>
+        {% if search_text or selected_category %}
+          <a class="clear-filters" href="{{ url_for('inventory_page') }}">Clear</a>
+        {% endif %}
+      </form>
+
+      <div class="table-scroll">
+        <table class="inventory-table">
+          <thead>
+            <tr><th scope="col">Resource</th><th scope="col">Category</th><th scope="col">Total units</th><th scope="col">Available</th><th scope="col">Stock status</th></tr>
+          </thead>
+          <tbody>
+            {% for resource in resources %}
+              <tr>
+                <td><strong>{{ resource.name }}</strong><span class="resource-id">{{ resource.id }}</span></td>
+                <td>{{ resource.category }}</td>
+                <td>{{ resource.total }}</td>
+                <td><strong>{{ resource.available }}</strong></td>
+                <td><span class="stock-badge {{ resource.stock_class }}">{{ resource.stock_label }}</span></td>
+              </tr>
+            {% else %}
+              <tr><td class="empty-results" colspan="5">No results found. Try another search or category.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </section>
+{% endblock %}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ResourceHub{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <header class="site-header">
+    <a class="brand" href="{{ url_for('home') }}">ResourceHub</a>
+    <nav aria-label="Main navigation">
+      <a class="nav-link {% if request.endpoint == 'home' %}active{% endif %}" href="{{ url_for('home') }}">Home</a>
+      <a class="nav-link {% if request.endpoint == 'inventory_page' %}active{% endif %}" href="{{ url_for('inventory_page') }}">Inventory</a>
+      <a class="nav-link {% if request.endpoint in ['borrow_route', 'return_route'] %}active{% endif %}" href="{{ url_for('borrow_route') }}">Borrow / Return</a>
+      <a class="nav-link {% if request.endpoint == 'dashboard_page' %}active{% endif %}" href="{{ url_for('dashboard_page') }}">Dashboard</a>
+    </nav>
+  </header>
+
+  <main id="main-content" class="page-content {% block page_class %}{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <p>ResourceHub · Campus equipment lending</p>
+  </footer>
+</body>
+</html>

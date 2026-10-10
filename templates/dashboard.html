@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard · ResourceHub{% endblock %}
+{% block page_class %}dashboard-page{% endblock %}
+
+{% block content %}
+  <section class="dashboard-page">
+    <div class="page-heading">
+      <p class="eyebrow">CAMPUS OVERVIEW</p>
+      <h1>Resource dashboard</h1>
+      <p>A quick summary of equipment availability and lending.</p>
+    </div>
+
+    <section class="dashboard-stats" aria-label="Inventory totals">
+      <article class="dashboard-stat total-stat"><span>Total units</span><strong>{{ summary.total_units }}</strong><small>Across all resources</small></article>
+      <article class="dashboard-stat available-stat"><span>Available</span><strong>{{ summary.available_units }}</strong><small>Ready to borrow</small></article>
+      <article class="dashboard-stat borrowed-stat"><span>Borrowed</span><strong>{{ summary.borrowed_units }}</strong><small>Currently held by fellows</small></article>
+    </section>
+
+    <div class="dashboard-panels">
+      <section class="dashboard-panel" aria-labelledby="low-stock-title">
+        <div class="dashboard-panel-heading"><div><p class="eyebrow">RESTOCKING</p><h2 id="low-stock-title">Low stock</h2></div><span class="panel-count">{{ summary.low_stock|length }}</span></div>
+        {% if summary.low_stock %}
+          <ul class="dashboard-list">
+            {% for resource in summary.low_stock %}
+              <li><span><strong>{{ resource.name }}</strong><small>{{ resource.id }} · {{ resource.category }}</small></span><span class="stock-badge {{ 'out' if resource.available == 0 else 'low' }}">{{ resource.available }} available</span></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="dashboard-empty">All resources have at least 3 available units.</p>
+        {% endif %}
+      </section>
+
+      <section class="dashboard-panel" aria-labelledby="most-borrowed-title">
+        <div class="dashboard-panel-heading"><div><p class="eyebrow">LENDING ACTIVITY</p><h2 id="most-borrowed-title">Most borrowed</h2></div></div>
+        {% if summary.most_borrowed %}
+          <ul class="dashboard-list leaders-list">
+            {% for resource in summary.most_borrowed %}
+              <li><span><strong>{{ resource.name }}</strong><small>{{ resource.id }} · {{ resource.category }}</small></span><span class="borrowed-count">{{ resource.borrowed }} <small>on loan</small></span></li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="dashboard-empty">No resources are currently borrowed.</p>
+        {% endif %}
+      </section>
+    </div>
+  </section>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Page not found · ResourceHub{% endblock %}
+{% block page_class %}not-found-page{% endblock %}
+
+{% block content %}
+  <section class="not-found-card" aria-labelledby="not-found-title">
+    <p class="eyebrow">ERROR 404</p>
+    <h1 id="not-found-title">We can’t find that page.</h1>
+    <p>The address may be incorrect, or the page may have moved.</p>
+    <div class="not-found-actions">
+      <a class="button-primary" href="{{ url_for('home') }}">Go to home</a>
+      <a class="secondary-link" href="{{ url_for('inventory_page') }}">View inventory</a>
+    </div>
+  </section>
+{% endblock %}

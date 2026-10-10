@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Borrow and return · ResourceHub{% endblock %}
+{% block page_class %}transactions-page{% endblock %}
+
+{% block content %}
+  <section class="transactions-page">
+    <div class="page-heading">
+      <p class="eyebrow">LOAN DESK</p>
+      <h1>Borrow or return equipment</h1>
+      <p>Choose a transaction. ResourceHub checks availability and current loans before saving.</p>
+    </div>
+
+    <div class="transaction-grid">
+      <section class="transaction-card borrow-card">
+        <div class="transaction-heading"><span class="transaction-icon">↗</span><div><h2>Borrow equipment</h2><p>Record a new loan for a fellow.</p></div></div>
+        {% if message_mode == 'borrow' and message %}<div class="notice {{ 'success' if succeeded else 'error' }}" role="status">{{ message }}</div>{% endif %}
+        {% if not fellows %}<p class="notice error" role="status">No fellows are registered yet. Add a fellow before recording a loan.</p>{% endif %}
+        {% if not resources %}<p class="notice error" role="status">No resources are in the inventory yet. Add equipment before recording a loan.</p>{% endif %}
+        <form action="{{ url_for('borrow_route') }}" method="post" class="transaction-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label for="borrow-fellow">Fellow</label>
+          <select id="borrow-fellow" name="fellow_id" required {% if not fellows %}disabled{% endif %}>
+            <option value="">Choose a fellow</option>
+            {% for fellow in fellows %}<option value="{{ fellow.id }}" {% if mode == 'borrow' and values.get('fellow_id') == fellow.id %}selected{% endif %}>{{ fellow.name }} ({{ fellow.id }})</option>{% endfor %}
+          </select>
+
+          <label for="borrow-resource">Equipment</label>
+          <select id="borrow-resource" name="resource_id" required {% if not resources %}disabled{% endif %}>
+            <option value="">Choose equipment</option>
+            {% for resource in resources %}<option value="{{ resource.id }}" {% if mode == 'borrow' and values.get('resource_id') == resource.id %}selected{% endif %}>{{ resource.name }} · {{ resource.available }} available</option>{% endfor %}
+          </select>
+
+          <label for="borrow-quantity">Quantity</label>
+          <input id="borrow-quantity" name="quantity" type="number" min="1" step="1" value="{{ values.get('quantity', '1') if mode == 'borrow' else '1' }}" required>
+
+          <label for="due-date">Due date</label>
+          <input id="due-date" name="due_date" type="date" value="{{ values.get('due_date') if mode == 'borrow' and values.get('due_date') else default_due_date }}" required>
+          <p class="field-help">The default due date is two weeks from today.</p>
+
+          <button class="button-primary" type="submit" {% if not fellows or not resources %}disabled{% endif %}>Record borrow</button>
+        </form>
+      </section>
+
+      <section class="transaction-card return-card">
+        <div class="transaction-heading"><span class="transaction-icon return-icon">↙</span><div><h2>Return equipment</h2><p>Record units coming back from a fellow.</p></div></div>
+        {% if message_mode == 'return' and message %}<div class="notice {{ 'success' if succeeded else 'error' }}" role="status">{{ message }}</div>{% endif %}
+        {% if not fellows %}<p class="notice error" role="status">No fellows are registered yet. Add a fellow before recording a return.</p>{% endif %}
+        {% if not resources %}<p class="notice error" role="status">No resources are in the inventory yet. Add equipment before recording a return.</p>{% endif %}
+        <form action="{{ url_for('return_route') }}" method="post" class="transaction-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label for="return-fellow">Fellow</label>
+          <select id="return-fellow" name="fellow_id" required {% if not fellows %}disabled{% endif %}>
+            <option value="">Choose a fellow</option>
+            {% for fellow in fellows %}<option value="{{ fellow.id }}" {% if mode == 'return' and values.get('fellow_id') == fellow.id %}selected{% endif %}>{{ fellow.name }} ({{ fellow.id }})</option>{% endfor %}
+          </select>
+
+          <label for="return-resource">Equipment</label>
+          <select id="return-resource" name="resource_id" required {% if not resources %}disabled{% endif %}>
+            <option value="">Choose equipment</option>
+            {% for resource in resources %}<option value="{{ resource.id }}" {% if mode == 'return' and values.get('resource_id') == resource.id %}selected{% endif %}>{{ resource.name }}</option>{% endfor %}
+          </select>
+
+          <label for="return-quantity">Quantity</label>
+          <input id="return-quantity" name="quantity" type="number" min="1" step="1" value="{{ values.get('quantity', '1') if mode == 'return' else '1' }}" required>
+          <p class="field-help">You can only return units this fellow currently holds.</p>
+
+          <button class="button-primary return-button" type="submit" {% if not fellows or not resources %}disabled{% endif %}>Record return</button>
+        </form>
+      </section>
+    </div>
+  </section>
+{% endblock %}
