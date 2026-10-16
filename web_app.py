@@ -63,27 +63,45 @@ TURNSTILE_SITE_KEY = os.environ.get(
     "TURNSTILE_SITE_KEY", "1x00000000000000000000AA" if LOCAL_DEVELOPMENT else "")
 
 
-def activate_shop(shop_id):
-    """Select the isolated SQLite file for a shop while holding LOCK."""
+def activate_shop(shop_id, allow_create=False):
+    """Select a shop database safely while holding LOCK."""
     if shop_id != "default" and not re.fullmatch(r"[a-f0-9]{16}", str(shop_id)):
         raise RuntimeError("Invalid shop account configuration.")
+
     if shop_id == "default":
-        inventory.DB_FILE = os.path.join(inventory.DATA_DIR, "campus_resources.db")
-        inventory.BACKUP_DIR = ROOT_BACKUP_DIR
+        db_file = os.path.join(inventory.DATA_DIR, "campus_resources.db")
+        backup_dir = ROOT_BACKUP_DIR
     else:
         shop_dir = os.path.join(TENANT_DIR, shop_id)
-        os.makedirs(shop_dir, exist_ok=True)
-        inventory.DB_FILE = os.path.join(shop_dir, "campus_resources.db")
-        inventory.BACKUP_DIR = os.path.join(shop_dir, "backups")
-    if os.path.exists(inventory.DB_FILE):
-        inventory.refresh_state()
+        db_file = os.path.join(shop_dir, "campus_resources.db")
+        backup_dir = os.path.join(shop_dir, "backups")
 
+    if not os.path.isfile(db_file) and not allow_create:
+        raise RuntimeError("Shop database is missing. Access has been blocked.")
 
+    if allow_create:
+        os.makedirs(os.path.dirname(db_file), exist_ok=True)
+
+    previous_db = inventory.DB_FILE
+    previous_backup = inventory.BACKUP_DIR
+
+    try:
+        inventory.DB_FILE = db_file
+        inventory.BACKUP_DIR = backup_dir
+        if os.path.isfile(db_file):
+            inventory.refresh_state()
+    except Exception:
+        inventory.resources.clear()
+        inventory.fellows.clear()
+        inventory.borrow_records.clear()
+        inventory.DB_FILE = previous_db
+        inventory.BACKUP_DIR = previous_backup
+        raise
 def create_shop_database(shop_id, shop_name, phone, email):
     """Create an empty tenant database without the demo inventory."""
     previous_db, previous_backup = inventory.DB_FILE, inventory.BACKUP_DIR
     try:
-        activate_shop(shop_id)
+        activate_shop(shop_id, allow_create=True)
         inventory.init_db()
         with inventory.connect() as db:
             db.execute("DELETE FROM loans")
