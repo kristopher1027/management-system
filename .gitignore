@@ -9,3 +9,6 @@ report.csv
 data.json
 *.sqlite3
 *.sqlite
+data.json
+*.sqlite3
+*.sqlite
