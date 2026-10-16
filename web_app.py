@@ -59,6 +59,46 @@ TENANT_DIR = os.path.join(inventory.DATA_DIR, "shops")
 ROOT_BACKUP_DIR = inventory.BACKUP_DIR
 email_challenges = {}
 email_ip_sends = {}
+
+# In-memory login rate limiting: five failures, then a 15-minute cooldown.
+LOGIN_ATTEMPTS = {}
+LOGIN_FAILURE_WINDOW = 15 * 60
+LOGIN_MAX_FAILURES = 5
+LOGIN_LOCKOUT_SECONDS = 15 * 60
+
+
+def login_retry_after(ip):
+    """Return remaining cooldown seconds, or zero when login is allowed."""
+    record = LOGIN_ATTEMPTS.get(ip)
+    if not record:
+        return 0
+
+    now = time.time()
+    if record["locked_until"] > now:
+        return int(record["locked_until"] - now) + 1
+
+    if now - record["window_start"] >= LOGIN_FAILURE_WINDOW:
+        LOGIN_ATTEMPTS.pop(ip, None)
+
+    return 0
+
+
+def record_login_failure(ip):
+    """Count failed logins from an IP and start cooldown at the limit."""
+    now = time.time()
+    record = LOGIN_ATTEMPTS.get(ip)
+
+    if not record or now - record["window_start"] >= LOGIN_FAILURE_WINDOW:
+        record = {
+            "window_start": now,
+            "failures": 0,
+            "locked_until": 0,
+        }
+        LOGIN_ATTEMPTS[ip] = record
+
+    record["failures"] += 1
+    if record["failures"] >= LOGIN_MAX_FAILURES:
+        record["locked_until"] = now + LOGIN_LOCKOUT_SECONDS
 TURNSTILE_SITE_KEY = os.environ.get(
     "TURNSTILE_SITE_KEY", "1x00000000000000000000AA" if LOCAL_DEVELOPMENT else "")
 
@@ -867,6 +907,18 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(username, str) or not isinstance(password, str):
                     raise ValueError("Enter a username and password.")
                 username = username.strip().lower()
+                login_ip = self.client_address[0]
+
+                if path == "/api/login":
+                    retry_after = login_retry_after(login_ip)
+                    if retry_after:
+                        self.respond(
+                            429,
+                            {"error": "Too many failed sign-in attempts. Try again later."},
+                            headers={"Retry-After": str(retry_after)},
+                        )
+                        return
+
                 if path == "/api/register":
                     name = data.get("name", "")
                     company = data.get("company_name", "")
@@ -929,14 +981,19 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     user = users.get(username)
                     if not user:
+                        record_login_failure(login_ip)
                         self.respond(401, {"error": "Username or password is incorrect."})
                         return
                     expected = bytes.fromhex(user["password_hash"])
                     actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
                                                   bytes.fromhex(user["salt"]), PASSWORD_ROUNDS)
                     if not hmac.compare_digest(actual, expected):
+                        record_login_failure(login_ip)
                         self.respond(401, {"error": "Username or password is incorrect."})
                         return
+
+                    LOGIN_ATTEMPTS.pop(login_ip, None)
+
                 cookie = self.set_session(username)
                 self.respond(200, {"message": "Signed in.", "name": users[username]["name"], "role": users[username]["role"]},
                              headers={"Set-Cookie": cookie})
