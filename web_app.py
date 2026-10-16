@@ -912,8 +912,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    load_users()
+    
     inventory.load_data()
+    load_users()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"ResourceHub is running at http://{HOST}:{PORT}")
     print("Press Ctrl+C to stop the server.")
