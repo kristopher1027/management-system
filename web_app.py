@@ -608,22 +608,39 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(404, {"error": "Page not found."})
 
     def current_user(self):
-        """Return the active username and extend its inactivity timeout."""
+        """Return a valid account session and extend its inactivity timeout."""
         from http.cookies import SimpleCookie
+
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get("Cookie", ""))
             token = cookie[SESSION_COOKIE].value
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             return None
+
         session = sessions.get(token)
         now = time.time()
-        if not session or session["expires"] < now:
+
+        if not isinstance(session, dict) or session.get("expires", 0) <= now:
             sessions.pop(token, None)
             return None
+
+        username = session.get("username")
+        shop_id = session.get("shop_id")
+        user = users.get(username) if isinstance(username, str) else None
+
+        # Reject sessions whose account or tenant no longer matches.
+        if (
+            not isinstance(user, dict)
+            or user.get("shop_id") != shop_id
+            or user.get("role") not in ("owner", "staff")
+        ):
+            sessions.pop(token, None)
+            return None
+
+        activate_shop(shop_id)
         session["expires"] = now + SESSION_TTL
-        activate_shop(session["shop_id"])
-        return session["username"]
+        return username
 
     def set_session(self, username):
         token = secrets.token_urlsafe(32)
