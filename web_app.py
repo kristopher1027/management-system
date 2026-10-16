@@ -586,8 +586,28 @@ class Handler(BaseHTTPRequestHandler):
         secure = "; Secure" if COOKIE_SECURE else ""
         return f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0{secure}"
 
+    def is_same_origin_request(self):
+        origin = self.headers.get("Origin")
+        if not origin:
+            return False
+
+        expected_host = self.headers.get("Host", "").lower()
+        parsed_origin = urlparse(origin)
+
+        if parsed_origin.scheme not in ("http", "https"):
+            return False
+        if not parsed_origin.netloc or parsed_origin.path not in ("", "/"):
+            return False
+        if parsed_origin.query or parsed_origin.fragment or parsed_origin.username:
+            return False
+
+        return parsed_origin.netloc.lower() == expected_host
+
     def do_POST(self):
         path = urlparse(self.path).path
+        if not self.is_same_origin_request():
+            self.respond(403, {"error": "Request origin validation failed."})
+            return
         if path == "/api/send-verification":
             self.handle_email_verification()
             return
