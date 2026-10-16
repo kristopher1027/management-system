@@ -41,8 +41,8 @@ class ResourceManagerTests(unittest.TestCase):
         self.assertEqual(main.outstanding("F001", "R001"), 1)
 
     def test_most_borrowed_reports_ties(self):
-        main.borrow("F001", "R001", 2)
-        main.borrow("F001", "R002", 2)
+        main.borrow("F001", "R001", 1)
+        main.borrow("F001", "R002", 1)
         report = main.report_data()
         self.assertEqual({r["id"] for r in report["most_borrowed"]}, {"R001", "R002"})
 
