@@ -101,9 +101,12 @@ def create_shop_database(shop_id, shop_name, phone, email):
 def send_email_code(email):
     host = os.environ.get("RESOURCEHUB_SMTP_HOST", "smtp.gmail.com")
     sender = os.environ.get("RESOURCEHUB_SMTP_FROM", "")
-    password = os.environ.get("RESOURCEHUB_SMTP_PASSWORD", "")
-    if not sender or not password:
-        raise RuntimeError("Set RESOURCEHUB_SMTP_FROM to the sending Gmail address and RESOURCEHUB_SMTP_PASSWORD to its Google app password in the private .env file.")
+    password = os.environ.get("RESOURCEHUB_SMTP_PASSWORD", "").replace(" ", "")
+    if (not sender or not password or sender.lower() == "your-sender@gmail.com"
+            or password.lower() == "your-google-app-password"):
+        raise RuntimeError("Replace the example sender and password in .env with your sending Gmail address and its Google App Password.")
+    if len(password) != 16:
+        raise RuntimeError("The Gmail app password should be 16 characters. Use a Google App Password, not your regular Gmail password.")
     code = f"{secrets.randbelow(1_000_000):06d}"
     message = (f"From: ResourceHub <{sender}>\r\nTo: {email}\r\n"
                "Subject: Your ResourceHub verification code\r\n"
