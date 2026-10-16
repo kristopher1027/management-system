@@ -6,3 +6,6 @@ __pycache__/
 backups/
 auth.json
 report.csv
+data.json
+*.sqlite3
+*.sqlite
