@@ -179,6 +179,37 @@ def send_email_code(email):
     email_challenges[email.lower()] = {"code": code, "expires": time.time() + 600, "attempts": 0}
 
 
+
+
+def send_test_email(email):
+    email = email.strip()
+    if (len(email) > 254 or email.count("@") != 1
+            or any(char.isspace() for char in email)
+            or "." not in email.rsplit("@", 1)[-1]):
+        raise ValueError("Enter a valid email address.")
+
+    host = os.environ.get("RESOURCEHUB_SMTP_HOST", "smtp.gmail.com")
+    sender = os.environ.get("RESOURCEHUB_SMTP_FROM", "")
+    password = os.environ.get("RESOURCEHUB_SMTP_PASSWORD", "").replace(" ", "")
+    username = os.environ.get("RESOURCEHUB_SMTP_USERNAME", sender)
+    port = int(os.environ.get("RESOURCEHUB_SMTP_PORT", "587"))
+
+    if not sender or not password or len(password) != 16:
+        raise RuntimeError(
+            "Check RESOURCEHUB_SMTP_FROM and RESOURCEHUB_SMTP_PASSWORD in .env."
+        )
+
+    message = (
+        f"From: ResourceHub <{sender}>\\r\\n"
+        f"To: {email}\\r\\n"
+        "Subject: ResourceHub email test\\r\\n"
+        "Content-Type: text/plain; charset=utf-8\\r\\n\\r\\n"
+        "Your ResourceHub email configuration is working."
+    )
+    with smtplib.SMTP(host, port, timeout=15) as smtp:
+        smtp.starttls()
+        smtp.login(username, password)
+        smtp.sendmail(sender, [email], message.encode("utf-8"))
 def verify_turnstile(token, remote_ip):
     secret = os.environ.get(
         "TURNSTILE_SECRET_KEY", "1x0000000000000000000000000000000AA" if LOCAL_DEVELOPMENT else "")
@@ -266,7 +297,17 @@ PAGE = r'''<!doctype html>
   <dialog id="detailsDialog" style="border:0;border-radius:15px;padding:24px;width:min(440px,calc(100% - 28px));box-shadow:0 25px 80px #101b2d33"><form id="detailsForm"><h2 style="margin:0 0 5px">Product details</h2><p class="subtle" id="detailsItemName" style="margin:0 0 16px"></p><input id="detailsId" type="hidden"><div class="field"><label for="detailsSku">SKU / barcode</label><input id="detailsSku" maxlength="80"></div><div class="field"><label for="detailsPrice">Unit price</label><input id="detailsPrice" type="number" min="0" step="0.01" required></div><div class="field"><label for="detailsSupplier">Supplier</label><input id="detailsSupplier" maxlength="100"></div><div class="field"><label for="detailsThreshold">Restock alert at</label><input id="detailsThreshold" type="number" min="0" step="1" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelDetails">Cancel</button><button class="btn" type="submit">Save details</button></div><div id="detailsMessage" class="form-message" role="status"></div></form></dialog>
   <dialog id="restockDialog" style="border:0;border-radius:15px;padding:24px;width:min(440px,calc(100% - 28px));box-shadow:0 25px 80px #101b2d33"><form id="restockForm"><h2 style="margin:0 0 5px">Stock in items</h2><p class="subtle" style="margin:0 0 16px">Record newly received units and update remaining stock.</p><div class="field"><label for="restockItem">Shop item</label><select id="restockItem" required></select></div><div class="field"><label for="restockQuantity">Quantity received</label><input id="restockQuantity" type="number" min="1" step="1" value="1" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelRestock">Cancel</button><button class="btn" type="submit">Update stock</button></div><div id="restockMessage" class="form-message" role="status"></div></form></dialog>
   <dialog id="staffDialog" style="border:0;border-radius:15px;padding:24px;width:min(500px,calc(100% - 28px));box-shadow:0 25px 80px #101b2d33"><h2 style="margin:0 0 5px">Staff accounts</h2><p class="subtle" style="margin:0 0 16px">Create staff logins for sales, loans, and returns.</p><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Manage</th></tr></thead><tbody id="staffRows"></tbody></table></div><form id="staffForm" style="margin-top:22px"><h3 style="font-size:14px">Add staff member</h3><div class="field"><label for="staffName">Name</label><input id="staffName" maxlength="80" required></div><div class="field"><label for="staffUsername">Username</label><input id="staffUsername" minlength="3" maxlength="40" required></div><div class="field"><label for="staffPassword">Initial password</label><input id="staffPassword" type="password" minlength="10" autocomplete="new-password" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="closeStaff">Close</button><button class="btn" type="submit">Create staff account</button></div><div id="staffMessage" class="form-message" role="status"></div></form></dialog>
-  <dialog id="shopSettingsDialog" style="border:0;border-radius:15px;padding:24px;width:min(500px,calc(100% - 28px));box-shadow:0 25px 80px #101b2d33"><form id="shopSettingsForm"><h2 style="margin:0 0 5px">Shop settings</h2><p class="subtle" style="margin:0 0 16px">Set the identity customers and staff see throughout this site.</p><div class="field"><label for="shopName">Shop name</label><input id="shopName" maxlength="60" required></div><div class="field"><label for="shopLogo">Logo image (PNG, JPEG, or WebP · max 250 KB)</label><input id="shopLogo" type="file" accept="image/png,image/jpeg,image/webp"><div style="display:flex;align-items:center;gap:12px;margin-top:10px"><img id="shopLogoPreview" alt="Logo preview" hidden style="width:48px;height:48px;object-fit:contain;border:1px solid var(--line);border-radius:10px;padding:3px"><button type="button" class="btn secondary" id="removeShopLogo">Remove logo</button></div></div><div class="field"><label for="shopColor">Brand color</label><div style="display:flex;align-items:center;gap:10px"><input id="shopColor" type="color" style="width:54px;height:42px;padding:4px"><span class="subtle">Used for buttons, highlights, and the logo tile.</span></div></div><div class="field"><label for="shopCurrency">Currency code (ISO 4217)</label><input id="shopCurrency" maxlength="3" minlength="3" pattern="[A-Za-z]{3}" placeholder="NGN" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelShopSettings">Cancel</button><button class="btn" type="submit">Save shop settings</button></div><div id="shopSettingsMessage" class="form-message" role="status"></div></form></dialog>
+  <dialog id="shopSettingsDialog" style="border:0;border-radius:15px;padding:24px;width:min(500px,calc(100% - 28px));box-shadow:0 25px 80px #101b2d33"><form id="shopSettingsForm"><h2 style="margin:0 0 5px">Shop settings</h2><p class="subtle" style="margin:0 0 16px">Set the identity customers and staff see throughout this site.</p><div class="field"><label for="shopName">Shop name</label><input id="shopName" maxlength="60" required></div><div class="field"><label for="shopLogo">Logo image (PNG, JPEG, or WebP · max 250 KB)</label><input id="shopLogo" type="file" accept="image/png,image/jpeg,image/webp"><div style="display:flex;align-items:center;gap:12px;margin-top:10px"><img id="shopLogoPreview" alt="Logo preview" hidden style="width:48px;height:48px;object-fit:contain;border:1px solid var(--line);border-radius:10px;padding:3px"><button type="button" class="btn secondary" id="removeShopLogo">Remove logo</button></div></div><div class="field"><label for="shopColor">Brand color</label><div style="display:flex;align-items:center;gap:10px"><input id="shopColor" type="color" style="width:54px;height:42px;padding:4px"><span class="subtle">Used for buttons, highlights, and the logo tile.</span></div></div><div class="field"><label for="shopCurrency">Currency code (ISO 4217)</label><input id="shopCurrency" maxlength="3" minlength="3" pattern="[A-Za-z]{3}" placeholder="NGN" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelShopSettings">Cancel</button><button class="btn" type="submit">Save shop settings</button></div><div id="shopSettingsMessage" class="form-message" role="status"></div>
+<div class="field">
+  <h3>Email delivery</h3>
+  <p>SMTP credentials are read securely from the server's private .env file.</p>
+  <label for="testEmailAddress">Send a test email to</label>
+  <input id="testEmailAddress" type="email" maxlength="254"
+         placeholder="you@example.com" autocomplete="email" required>
+  <button type="button" class="btn secondary" id="testEmailButton">Send test email</button>
+  <div id="testEmailMessage" class="form-message" role="status"></div>
+</div>
+</form></dialog>
   <dialog id="confirmDialog" style="border:0;border-radius:15px;padding:24px;width:min(420px,calc(100% - 28px));box-shadow:0 25px 80px #101b2d33"><h2 id="confirmTitle" style="margin:0 0 6px">Confirm inventory change</h2><p id="confirmDetail" class="subtle" style="margin:0 0 20px"></p><div style="display:flex;gap:9px;justify-content:flex-end"><button type="button" class="btn secondary" id="confirmCancel">Cancel</button><button type="button" class="btn" id="confirmOk">Confirm</button></div></dialog>
   <script>
     const $ = selector => document.querySelector(selector);
@@ -311,7 +352,27 @@ PAGE = r'''<!doctype html>
     $('#authForm').addEventListener('click',async event=>{if(event.target.id!=='sendEmailCode')return;const errorBox=$('#authError');errorBox.textContent='';try{const result=await api('/api/send-verification',{email:$('#companyEmail').value});errorBox.textContent=result.message;errorBox.style.color='var(--green)'}catch(error){errorBox.textContent=error.message;errorBox.style.color='var(--red)'}});
     $('#shopSettingsButton').addEventListener('click',()=>{const settings=state.settings;$('#shopName').value=settings.shop_name;$('#shopColor').value=settings.brand_color;$('#shopCurrency').value=settings.currency;$('#shopLogo').value='';pendingLogo=null;$('#shopLogoPreview').src=settings.logo_data||'';$('#shopLogoPreview').hidden=!settings.logo_data;$('#shopSettingsMessage').textContent='';$('#shopSettingsDialog').showModal()});$('#cancelShopSettings').addEventListener('click',()=>$('#shopSettingsDialog').close());$('#shopLogo').addEventListener('change',()=>{const file=$('#shopLogo').files[0];if(!file)return;if(file.size>250000){$('#shopSettingsMessage').className='form-message error';$('#shopSettingsMessage').textContent='Choose a logo no larger than 250 KB.';$('#shopLogo').value='';return}const reader=new FileReader();reader.onload=()=>{pendingLogo=reader.result;$('#shopLogoPreview').src=pendingLogo;$('#shopLogoPreview').hidden=false;$('#shopSettingsMessage').textContent=''};reader.onerror=()=>{$('#shopSettingsMessage').className='form-message error';$('#shopSettingsMessage').textContent='Could not read this image.'};reader.readAsDataURL(file)});$('#removeShopLogo').addEventListener('click',()=>{pendingLogo='';$('#shopLogo').value='';$('#shopLogoPreview').removeAttribute('src');$('#shopLogoPreview').hidden=true});$('#shopSettingsForm').addEventListener('submit',async event=>{event.preventDefault();const message=$('#shopSettingsMessage');message.className='form-message';message.textContent='';try{const result=await api('/api/settings',{shop_name:$('#shopName').value,brand_color:$('#shopColor').value,currency:$('#shopCurrency').value,logo_data:pendingLogo===null?state.settings.logo_data:pendingLogo});pendingLogo=null;$('#shopSettingsDialog').close();await refresh();showToast(result.message)}catch(error){message.classList.add('error');message.textContent=error.message}});$('#staffButton').addEventListener('click',async()=>{try{await loadStaff();$('#staffMessage').textContent='';$('#staffDialog').showModal()}catch(error){showToast(error.message)}});$('#closeStaff').addEventListener('click',()=>$('#staffDialog').close());$('#staffRows').addEventListener('click',async event=>{const button=event.target.closest('.remove-staff');if(!button)return;if(!window.confirm(`Remove staff account ${button.dataset.username}?`))return;try{const result=await api('/api/staff/delete',{username:button.dataset.username});await loadStaff();$('#staffMessage').textContent=result.message}catch(error){$('#staffMessage').className='form-message error';$('#staffMessage').textContent=error.message}});async function loadStaff(){const result=await api('/api/staff');$('#staffRows').innerHTML=result.staff.length?result.staff.map(person=>`<tr><td>${esc(person.name)}</td><td>${esc(person.username)}</td><td>Staff</td><td><button class="btn secondary remove-staff" data-username="${esc(person.username)}" type="button">Remove</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty">No staff accounts yet.</td></tr>'}$('#staffForm').addEventListener('submit',async event=>{event.preventDefault();const message=$('#staffMessage');message.className='form-message';message.textContent='';try{const result=await api('/api/staff',{name:$('#staffName').value,username:$('#staffUsername').value,password:$('#staffPassword').value});event.target.reset();await loadStaff();message.textContent=result.message}catch(error){message.classList.add('error');message.textContent=error.message}});$('#logoutButton').addEventListener('click',async()=>{try{await api('/api/logout',{});$('#appScreen').hidden=true;$('#authScreen').hidden=true;$('#landingScreen').hidden=false;$('#authPassword').value='';$('#staffButton').hidden=true;$('#shopSettingsButton').hidden=true;$('#registerTab').hidden=!registrationOpen;setAuthMode('login')}catch(error){showToast(error.message)}});
     api('/api/me').then(me=>{registrationOpen=me.registration_open;turnstileSiteKey=me.turnstile_site_key||'';applyShopSettings(me.settings);$('#registerTab').hidden=!registrationOpen;if(turnstileSiteKey){const script=document.createElement('script');script.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';script.async=true;script.defer=true;document.head.appendChild(script);script.onload=renderTurnstileWidget}if(me.authenticated)showApp(me.name,me.role);else setAuthMode('login')}).catch(error=>showToast(error.message));setInterval(()=>{if(!$('#appScreen').hidden)refresh().catch(()=>{})},30000);
-  </script>
+  
+document.querySelector('#testEmailButton').addEventListener('click', async () => {
+  const button = document.querySelector('#testEmailButton');
+  const message = document.querySelector('#testEmailMessage');
+  const email = document.querySelector('#testEmailAddress').value.trim();
+
+  message.className = 'form-message';
+  message.textContent = '';
+  button.disabled = true;
+
+  try {
+    const result = await api('/api/settings/test-email', { email });
+    message.textContent = result.message || 'Test email sent.';
+  } catch (error) {
+    message.classList.add('error');
+    message.textContent = error.message || 'Email test failed. Check server settings.';
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
 </div></div></body></html>'''
 
 
@@ -695,6 +756,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/staff/delete":
             self.handle_staff_deletion()
             return
+        if path == "/api/settings/test-email":
+            self.handle_test_email()
+            return
         if path == "/api/settings":
             self.handle_shop_settings()
             return
@@ -885,6 +949,25 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, {"message": f"Removed staff account {target}."})
         except ValueError as error:
             self.respond(400, {"error": str(error)})
+
+    def handle_test_email(self):
+        try:
+            data = self.read_json(max_bytes=10_000)
+            with LOCK:
+                actor = self.current_user()
+                if not actor:
+                    self.respond(401, {"error": "Your session expired. Please sign in again."})
+                    return
+                if users[actor]["role"] != "owner":
+                    self.respond(403, {"error": "Only the owner can test email settings."})
+                    return
+
+            send_test_email(str(data.get("email", "")))
+            self.respond(200, {"message": "Test email sent successfully. Check the recipient inbox."})
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
+        except (OSError, RuntimeError, smtplib.SMTPException, ValueError):
+            self.respond(503, {"error": "Email test failed. Check your SMTP settings in .env."})
 
     def handle_shop_settings(self):
         try:
