@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 import zipfile
 
 import main as inventory
+import audit
 
 
 def load_local_environment():
@@ -101,6 +102,29 @@ def record_login_failure(ip):
         record["locked_until"] = now + LOGIN_LOCKOUT_SECONDS
 TURNSTILE_SITE_KEY = os.environ.get(
     "TURNSTILE_SITE_KEY", "1x00000000000000000000AA" if LOCAL_DEVELOPMENT else "")
+
+
+AUDIT_ACTIONS = {
+    "/api/resources": "item_added", "/api/resource-details": "item_updated",
+    "/api/delete-resource": "item_deleted", "/api/restock": "stock_in",
+    "/api/sale": "sale", "/api/borrow": "loan", "/api/return": "return",
+}
+
+
+def audit_log(handler, username, action, target="", detail=""):
+    """Record an audit entry for a signed-in user. Call while holding LOCK."""
+    audit.record(inventory, username, users[username]["role"], action,
+                 target, detail, handler.client_address[0])
+
+
+def audit_detail(path, data, message, before_resources):
+    parts = [message]
+    if path == "/api/resource-details":
+        parts.append(audit.describe_item_changes(before_resources, data) or "no field changed")
+    for key in ("quantity", "fellow_id", "customer"):
+        if data.get(key) not in (None, ""):
+            parts.append(f"{key}={data[key]}")
+    return " | ".join(parts)
 
 
 def activate_shop(shop_id, allow_create=False):
@@ -398,6 +422,7 @@ dialog::backdrop{background:#16212b73}
     </section>
     <section class="panel" style="margin-top:20px"><div class="panel-head"><div><h2>Transaction history</h2><div class="subtle">Search sales, stock changes, loans, and returns</div></div><div class="actions"><input class="search" id="historySearch" type="search" placeholder="Search item or customer…" aria-label="Search transaction history"><select class="category-filter" id="historyType" aria-label="Filter transaction type"><option value="all">All transactions</option><option value="sale">Sales</option><option value="opening_stock">Opening stock</option><option value="restock">Stock-ins</option><option value="borrow">Loans</option><option value="return">Returns</option><option value="damaged">Damaged / lost</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Date and time</th><th>Type</th><th>Item</th><th>Quantity</th><th>Customer / fellow</th></tr></thead><tbody id="historyRows"><tr><td colspan="5" class="empty">Loading transaction history…</td></tr></tbody></table></div><div class="form-message" id="historyMessage" role="status"></div></section>
     <section class="panel" id="reportsPanel" style="margin-top:20px"><div class="panel-head"><div><h2>Reports</h2><div class="subtle" id="reportPeriod">Sales, top items, and current stock value</div></div><div class="actions"><button class="btn secondary" id="exportReport" type="button">↓ Export CSV</button><button class="btn secondary" id="backupButton" type="button">↓ Download backup</button></div></div><div class="stats" style="margin:0 0 18px"><article class="stat"><div class="stat-label">Sales this month</div><div class="stat-value" id="monthRevenue">—</div><div class="stat-foot">recorded sales value</div></article><article class="stat"><div class="stat-label">Units sold this month</div><div class="stat-value" id="monthUnits">—</div><div class="stat-foot">items sold</div></article><article class="stat"><div class="stat-label">All-time sales</div><div class="stat-value" id="lifetimeRevenue">—</div><div class="stat-foot" id="lifetimeUnits">— units sold</div></article><article class="stat"><div class="stat-label">Stock value</div><div class="stat-value" id="stockValue">—</div><div class="stat-foot">remaining units × current unit price</div></article></div><div class="panel-head" style="margin-bottom:8px"><div><h2 style="font-size:15px">Best sellers</h2></div></div><div class="table-wrap"><table><thead><tr><th>Product</th><th>Units sold</th><th>Sales value</th></tr></thead><tbody id="bestSellerRows"><tr><td colspan="3" class="empty">Loading reports…</td></tr></tbody></table></div><div class="subtle" style="margin-top:10px">Revenue uses the price recorded when each sale was made. Sales recorded before price tracking was added may have no revenue value.</div><div class="form-message" id="reportMessage" role="status"></div></section>
+    <section class="panel" id="auditPanel" style="margin-top:20px"><div class="panel-head"><div><h2>Audit log</h2><div class="subtle">Who changed what, and when</div></div><div class="actions"><input class="search" id="auditSearch" type="search" placeholder="Search person, action, item…" aria-label="Search audit log"><button class="btn secondary" id="exportAudit" type="button">↓ Export CSV</button></div></div><div class="table-wrap"><table><thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Item / target</th><th>Details</th></tr></thead><tbody id="auditRows"><tr><td colspan="5" class="empty">Loading audit log…</td></tr></tbody></table></div><div class="form-message" id="auditMessage" role="status"></div></section>
     <div class="footnote"><span id="footerBrandName">ResourceHub</span> · Vendor stock management</div>
   </main><div class="toast" id="toast" role="status"></div>
   <dialog id="addDialog" style="border:0;border-radius:15px;padding:24px;width:min(440px,calc(100% - 28px));box-shadow:0 25px 80px #101b2d33"><form id="addForm"><h2 style="margin:0 0 5px">Add shop item</h2><p class="subtle" style="margin:0 0 16px">Create a product and add its starting stock.</p><div class="field"><label for="newId">Item ID</label><input id="newId" placeholder="e.g. P004" required></div><div class="field"><label for="newName">Product name</label><input id="newName" placeholder="e.g. Headphones" required></div><div class="field"><label for="newCategory">Category</label><input id="newCategory" placeholder="e.g. Electronics" required></div><div class="field"><label for="newTotal">Starting stock</label><input id="newTotal" type="number" min="1" step="1" value="1" required></div><div class="field"><label for="newSku">SKU / barcode</label><input id="newSku" maxlength="80"></div><div class="field"><label for="newPrice">Unit price</label><input id="newPrice" type="number" min="0" step="0.01" value="0" required></div><div class="field"><label for="newSupplier">Supplier</label><input id="newSupplier" maxlength="100"></div><div class="field"><label for="newThreshold">Restock alert at</label><input id="newThreshold" type="number" min="0" step="1" value="3" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelAdd">Cancel</button><button class="btn" type="submit">Add item</button></div><div id="addMessage" class="form-message" role="status"></div></form></dialog>
@@ -436,12 +461,16 @@ dialog::backdrop{background:#16212b73}
       const loans=state.loans;$('#loanList').innerHTML=loans.length?loans.map(l=>`<div class="loan-row"><div><div class="loan-who">${esc(l.fellow_name)}</div><div class="loan-what">${esc(l.resource_name)}</div></div><div class="loan-count">${l.quantity} unit${l.quantity===1?'':'s'}</div></div>`).join(''):'<div class="empty" style="padding:15px 0">Nothing is currently on loan.</div>';
       $('#salesList').innerHTML=state.sales.length?state.sales.map(s=>`<div class="loan-row"><div><div class="loan-who">${esc(s.resource_name)} × ${s.quantity}</div><div class="loan-what">${esc(s.customer||'Walk-in customer')} · ${esc(new Date(s.created_at).toLocaleString())}</div></div><div class="loan-count">Sale</div></div>`).join(''):'<div class="empty" style="padding:15px 0">No sales recorded yet.</div>';
     }
-    async function refresh(){state=await api('/api/state');render();const loads=[loadHistory()];if(currentRole==='owner')loads.push(loadReports());await Promise.all(loads)}
+    async function refresh(){state=await api('/api/state');render();const loads=[loadHistory()];if(currentRole==='owner'){loads.push(loadReports());loads.push(loadAudit())}await Promise.all(loads)}
     async function loadHistory(){const query=new URLSearchParams({q:$('#historySearch').value,action:$('#historyType').value});try{const result=await api('/api/history?'+query.toString());$('#historyMessage').textContent='';const labels={sale:'Sale',opening_stock:'Opening stock',restock:'Stock-in',borrow:'Loan',return:'Return',damaged:'Damaged / lost'};$('#historyRows').innerHTML=result.history.length?result.history.map(row=>`<tr><td>${esc(new Date(row.created_at).toLocaleString())}</td><td>${esc(labels[row.action]||row.action)}</td><td><div class="resource-name">${esc(row.item)}</div><div class="resource-id">${esc(row.resource_id)}</div></td><td>${row.quantity}</td><td>${esc(row.party||'—')}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No transactions match your search.</td></tr>'}catch(error){$('#historyMessage').className='form-message error';$('#historyMessage').textContent=error.message}}
     function scheduleHistory(){clearTimeout(historyTimer);historyTimer=setTimeout(loadHistory,180)}
     $('#historySearch').addEventListener('input',scheduleHistory);$('#historyType').addEventListener('change',loadHistory);
     async function loadReports(){try{const report=await api('/api/reports');$('#reportMessage').textContent='';$('#reportPeriod').textContent=`Sales, best sellers, and stock value · ${report.period}`;$('#monthRevenue').textContent=money(report.month_revenue);$('#monthUnits').textContent=report.month_units;$('#lifetimeRevenue').textContent=money(report.lifetime_revenue);$('#lifetimeUnits').textContent=`${report.lifetime_units} units sold`;$('#stockValue').textContent=money(report.stock_value);$('#bestSellerRows').innerHTML=report.best_sellers.length?report.best_sellers.map(item=>`<tr><td><div class="resource-name">${esc(item.name)}</div><div class="resource-id">${esc(item.id)}</div></td><td>${item.units}</td><td>${money(item.revenue)}</td></tr>`).join(''):'<tr><td colspan="3" class="empty">No sales recorded yet.</td></tr>'}catch(error){$('#reportMessage').className='form-message error';$('#reportMessage').textContent=error.message}}
     $('#exportReport').addEventListener('click',async()=>{try{const response=await fetch('/api/reports/export.csv');if(!response.ok){const data=await response.json();throw new Error(data.error||'Could not export report.')}const file=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=file;link.download='resourcehub-report.csv';link.click();URL.revokeObjectURL(file)}catch(error){$('#reportMessage').className='form-message error';$('#reportMessage').textContent=error.message}});
+    let auditTimer;
+    async function loadAudit(){try{const result=await api('/api/audit?q='+encodeURIComponent($('#auditSearch').value));$('#auditMessage').textContent='';const labels={item_added:'Item added',item_updated:'Item updated',item_deleted:'Item deleted',stock_in:'Stock-in',sale:'Sale',loan:'Loan',return:'Return',staff_created:'Staff added',staff_removed:'Staff removed',settings_changed:'Settings changed'};$('#auditRows').innerHTML=result.audit.length?result.audit.map(row=>`<tr><td>${esc(new Date(row.created_at).toLocaleString())}</td><td>${esc(row.actor)}<div class="resource-id">${esc(row.role)}</div></td><td>${esc(labels[row.action]||row.action)}</td><td>${esc(row.target||'—')}</td><td style="white-space:normal;min-width:240px">${esc(row.detail)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No audit entries match.</td></tr>'}catch(error){$('#auditMessage').className='form-message error';$('#auditMessage').textContent=error.message}}
+    $('#auditSearch').addEventListener('input',()=>{clearTimeout(auditTimer);auditTimer=setTimeout(loadAudit,180)});
+    $('#exportAudit').addEventListener('click',async()=>{try{const response=await fetch('/api/audit/export.csv?q='+encodeURIComponent($('#auditSearch').value));if(!response.ok){const data=await response.json();throw new Error(data.error||'Could not export the audit log.')}const file=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=file;link.download='resourcehub-audit-log.csv';link.click();setTimeout(()=>URL.revokeObjectURL(file),1000)}catch(error){$('#auditMessage').className='form-message error';$('#auditMessage').textContent=error.message}});
     $('#backupButton').addEventListener('click',async()=>{try{const response=await fetch('/api/backup');if(!response.ok){const data=await response.json();throw new Error(data.error||'Could not download the backup.')}const file=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=file;link.download='resourcehub-backup.zip';link.click();setTimeout(()=>URL.revokeObjectURL(file),1000)}catch(error){$('#reportMessage').className='form-message error';$('#reportMessage').textContent=error.message}});
     $('#search').addEventListener('input',render);$('#categoryFilter').addEventListener('change',render);document.querySelectorAll('.tab[data-mode]').forEach(tab=>tab.addEventListener('click',()=>{mode=tab.dataset.mode;document.querySelectorAll('.tab[data-mode]').forEach(t=>t.classList.toggle('active',t===tab));$('#transactionMessage').textContent='';render()}));$('#fellow').addEventListener('change',render);
     $('#resourceRows').addEventListener('click',async event=>{const button=event.target.closest('.delete-resource');if(!button)return;const item=state.resources.find(r=>r.id===button.dataset.id);if(!item)return;try{const accepted=await confirmAction('Delete product?',`Delete ${item.name} (${item.id})? Products with loan or sales history cannot be deleted.`,'Delete product');if(!accepted)return;const result=await api('/api/delete-resource',{resource_id:item.id});await refresh();showToast(result.message)}catch(error){showToast(error.message)}});
@@ -451,7 +480,7 @@ dialog::backdrop{background:#16212b73}
     let authMode='login';
     function renderTurnstileWidget(){const target=$('#turnstileContainer');if(target&&turnstileSiteKey&&window.turnstile&&!target.dataset.widget){window.turnstile.render(target,{sitekey:turnstileSiteKey});target.dataset.widget='1'}}
     function setAuthMode(next){if(next==='register'&&!registrationOpen)next='login';authMode=next;const registering=next==='register';if(registering&&!$('#registrationFields'))$('#nameField').insertAdjacentHTML('afterend','<div id="registrationFields"><div class="field"><label for="companyName">Company name</label><input id="companyName" maxlength="100" required></div><div class="field"><label for="companyProducts">What do you sell?</label><input id="companyProducts" maxlength="120" placeholder="Products or services"></div><div class="field"><label for="companyPhone">Company phone</label><input id="companyPhone" autocomplete="tel" maxlength="24" required></div><div class="field"><label for="companyEmail">Company email</label><input id="companyEmail" type="email" autocomplete="email" maxlength="254" required></div><div class="field" style="display:flex;gap:8px"><input id="emailCode" inputmode="numeric" maxlength="6" placeholder="Email code" required><button class="btn secondary" id="sendEmailCode" type="button">Send code</button></div><div id="turnstileContainer"></div></div>');if($('#registrationFields')){$('#registrationFields').hidden=!registering;$('#registrationFields').querySelectorAll('input').forEach(input=>input.required=registering)}renderTurnstileWidget();$('#authTitle').textContent=registering?'Register your company':'Welcome back';$('#authSubtitle').textContent=registering?'Create a shop account. Verify your email and complete the bot check.':'Sign in to manage your shop and staff.';if(registering&&!turnstileSiteKey)$('#authSubtitle').textContent='Signup setup is incomplete: the site owner must configure Cloudflare Turnstile.';$('#nameField').hidden=!registering;$('#authName').required=registering;$('#authPassword').autocomplete=registering?'new-password':'current-password';$('#authSubmit').textContent=registering?'Create shop account':'Sign in';$('#registerTab').hidden=!registrationOpen;document.querySelectorAll('[data-auth-mode]').forEach(tab=>tab.classList.toggle('active',tab.dataset.authMode===next));$('#authError').textContent=''}
-    function showApp(name,role){currentRole=role||'staff';$('#accountName').textContent=`${name} · ${currentRole}`;$('#staffButton').hidden=currentRole!=='owner';$('#shopSettingsButton').hidden=currentRole!=='owner';$('#restockButton').hidden=currentRole!=='owner';$('#addButton').hidden=currentRole!=='owner';$('#exportReport').hidden=currentRole!=='owner';$('#backupButton').hidden=currentRole!=='owner';$('#reportsPanel').hidden=currentRole!=='owner';$('#landingScreen').hidden=true;$('#authScreen').hidden=true;$('#appScreen').hidden=false;refresh().catch(error=>showToast(error.message))}
+    function showApp(name,role){currentRole=role||'staff';$('#accountName').textContent=`${name} · ${currentRole}`;$('#staffButton').hidden=currentRole!=='owner';$('#shopSettingsButton').hidden=currentRole!=='owner';$('#restockButton').hidden=currentRole!=='owner';$('#addButton').hidden=currentRole!=='owner';$('#exportReport').hidden=currentRole!=='owner';$('#backupButton').hidden=currentRole!=='owner';$('#reportsPanel').hidden=currentRole!=='owner';$('#auditPanel').hidden=currentRole!=='owner';$('#landingScreen').hidden=true;$('#authScreen').hidden=true;$('#appScreen').hidden=false;refresh().catch(error=>showToast(error.message))}
     document.querySelectorAll('[data-open-auth]').forEach(button=>button.addEventListener('click',()=>{$('#landingScreen').hidden=true;$('#authScreen').hidden=false;setAuthMode('login')}));
     $('#backLanding').addEventListener('click',()=>{$('#authScreen').hidden=true;$('#landingScreen').hidden=false});
     document.querySelectorAll('[data-auth-mode]').forEach(tab=>tab.addEventListener('click',()=>setAuthMode(tab.dataset.authMode)));
@@ -733,6 +762,24 @@ class Handler(BaseHTTPRequestHandler):
                 staff = [{"username": key, "name": value["name"]} for key, value in users.items()
                          if value["role"] == "staff" and value.get("shop_id") == users[username].get("shop_id")]
                 self.respond(200, {"staff": staff})
+        elif path in ("/api/audit", "/api/audit/export.csv"):
+            with LOCK:
+                username = self.current_user()
+                if not username:
+                    self.respond(401, {"error": "Please sign in to continue."})
+                    return
+                if users[username]["role"] != "owner":
+                    self.respond(403, {"error": "Only the owner can view the audit log."})
+                    return
+                search_text = parse_qs(urlparse(self.path).query).get("q", [""])[0][:120]
+                try:
+                    if path.endswith(".csv"):
+                        self.respond(200, audit.to_csv(inventory, search_text), "text/csv; charset=utf-8",
+                                     headers={"Content-Disposition": "attachment; filename=resourcehub-audit-log.csv"})
+                    else:
+                        self.respond(200, {"audit": audit.entries(inventory, search_text)})
+                except sqlite3.Error:
+                    self.respond(500, {"error": "Could not read the audit log."})
         elif path in ("/api/reports", "/api/reports/export.csv", "/api/backup"):
             with LOCK:
                 username = self.current_user()
@@ -953,6 +1000,9 @@ class Handler(BaseHTTPRequestHandler):
                     inventory.borrow_records[:] = before_records
                     self.respond(500, {"error": f"Could not save this change: {error}"})
                     return
+                audit_log(self, username, AUDIT_ACTIONS[path],
+                          data.get("resource_id") or data.get("id", ""),
+                          audit_detail(path, data, message, before_resources))
             self.respond(200, {"message": message})
         except ValueError as error:
             self.respond(400, {"error": str(error)})
@@ -997,6 +1047,7 @@ class Handler(BaseHTTPRequestHandler):
                     users.pop(username, None)
                     self.respond(500, {"error": f"Could not save this staff account: {error}"})
                     return
+                audit_log(self, actor, "staff_created", username, f"name={name}")
             self.respond(201, {"message": f"Staff account created for {name}."})
         except ValueError as error:
             self.respond(400, {"error": str(error)})
@@ -1053,6 +1104,7 @@ class Handler(BaseHTTPRequestHandler):
                 for token, session in list(sessions.items()):
                     if session["username"] == target:
                         sessions.pop(token, None)
+                audit_log(self, actor, "staff_removed", target)
             self.respond(200, {"message": f"Removed staff account {target}."})
         except ValueError as error:
             self.respond(400, {"error": str(error)})
@@ -1091,6 +1143,10 @@ class Handler(BaseHTTPRequestHandler):
                     data.get("shop_name"), data.get("brand_color"),
                     data.get("currency"), data.get("logo_data", ""),
                 )
+                if success:
+                    audit_log(self, actor, "settings_changed", "",
+                              f"name={data.get('shop_name')}; currency={data.get('currency')}; "
+                              f"color={data.get('brand_color')}")
             if not success:
                 self.respond(400, {"error": message})
                 return
