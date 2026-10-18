@@ -5,18 +5,21 @@ import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
+import ipaddress
 import json
+import math
 import os
 import re
 import secrets
 import shutil
 import sqlite3
 import smtplib
+from email.message import EmailMessage
 import tempfile
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
-from threading import RLock
+from threading import RLock, Thread
 import time
 from urllib.parse import parse_qs, urlparse
 import zipfile
@@ -114,7 +117,7 @@ AUDIT_ACTIONS = {
 def audit_log(handler, username, action, target="", detail=""):
     """Record an audit entry for a signed-in user. Call while holding LOCK."""
     audit.record(inventory, username, users[username]["role"], action,
-                 target, detail, handler.client_address[0])
+                 target, detail, handler.client_ip())
 
 
 def audit_detail(path, data, message, before_resources):
@@ -180,29 +183,41 @@ def create_shop_database(shop_id, shop_name, phone, email):
         inventory.refresh_state()
 
 
-def send_email_code(email):
+def smtp_settings():
+    """Read and validate the SMTP settings from the environment."""
     host = os.environ.get("RESOURCEHUB_SMTP_HOST", "smtp.gmail.com")
     sender = os.environ.get("RESOURCEHUB_SMTP_FROM", "")
     password = os.environ.get("RESOURCEHUB_SMTP_PASSWORD", "").replace(" ", "")
+    username = os.environ.get("RESOURCEHUB_SMTP_USERNAME", sender)
+    port = int(os.environ.get("RESOURCEHUB_SMTP_PORT", "587"))
     if (not sender or not password or sender.lower() == "your-sender@gmail.com"
             or password.lower() == "your-google-app-password"):
         raise RuntimeError("Replace the example sender and password in .env with your sending Gmail address and its Google App Password.")
     if len(password) != 16:
         raise RuntimeError("The Gmail app password should be 16 characters. Use a Google App Password, not your regular Gmail password.")
-    code = f"{secrets.randbelow(1_000_000):06d}"
-    message = (f"From: ResourceHub <{sender}>\r\nTo: {email}\r\n"
-               "Subject: Your ResourceHub verification code\r\n"
-               "Content-Type: text/plain; charset=utf-8\r\n\r\n"
-               f"Your verification code is {code}. It expires in 10 minutes.")
-    port = int(os.environ.get("RESOURCEHUB_SMTP_PORT", "587"))
+    return host, port, sender, username, password
+
+
+def deliver_email(to_address, subject, body):
+    """Send one plain-text email. EmailMessage builds correct headers and rejects injected line breaks."""
+    host, port, sender, username, password = smtp_settings()
+    message = EmailMessage()
+    message["From"] = f"ResourceHub <{sender}>"
+    message["To"] = to_address
+    message["Subject"] = subject
+    message.set_content(body)
     with smtplib.SMTP(host, port, timeout=15) as smtp:
         smtp.starttls()
-        smtp.login(os.environ.get("RESOURCEHUB_SMTP_USERNAME", sender),
-                   password)
-        smtp.sendmail(sender, [email], message.encode("utf-8"))
-    email_challenges[email.lower()] = {"code": code, "expires": time.time() + 600, "attempts": 0}
+        smtp.login(username, password)
+        smtp.send_message(message)
 
 
+def send_email_code(email):
+    """Email a six-digit code and return it. The caller stores the code."""
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    deliver_email(email, "Your ResourceHub verification code",
+                  f"Your verification code is {code}. It expires in 10 minutes.")
+    return code
 
 
 def send_test_email(email):
@@ -211,29 +226,10 @@ def send_test_email(email):
             or any(char.isspace() for char in email)
             or "." not in email.rsplit("@", 1)[-1]):
         raise ValueError("Enter a valid email address.")
+    deliver_email(email, "ResourceHub email test",
+                  "Your ResourceHub email configuration is working.")
 
-    host = os.environ.get("RESOURCEHUB_SMTP_HOST", "smtp.gmail.com")
-    sender = os.environ.get("RESOURCEHUB_SMTP_FROM", "")
-    password = os.environ.get("RESOURCEHUB_SMTP_PASSWORD", "").replace(" ", "")
-    username = os.environ.get("RESOURCEHUB_SMTP_USERNAME", sender)
-    port = int(os.environ.get("RESOURCEHUB_SMTP_PORT", "587"))
 
-    if not sender or not password or len(password) != 16:
-        raise RuntimeError(
-            "Check RESOURCEHUB_SMTP_FROM and RESOURCEHUB_SMTP_PASSWORD in .env."
-        )
-
-    message = (
-        f"From: ResourceHub <{sender}>\\r\\n"
-        f"To: {email}\\r\\n"
-        "Subject: ResourceHub email test\\r\\n"
-        "Content-Type: text/plain; charset=utf-8\\r\\n\\r\\n"
-        "Your ResourceHub email configuration is working."
-    )
-    with smtplib.SMTP(host, port, timeout=15) as smtp:
-        smtp.starttls()
-        smtp.login(username, password)
-        smtp.sendmail(sender, [email], message.encode("utf-8"))
 def verify_turnstile(token, remote_ip):
     secret = os.environ.get(
         "TURNSTILE_SECRET_KEY", "1x0000000000000000000000000000000AA" if LOCAL_DEVELOPMENT else "")
@@ -249,6 +245,105 @@ def verify_turnstile(token, remote_ip):
         return bool(result.get("success"))
     except (OSError, ValueError, json.JSONDecodeError):
         return False
+
+PROXY_HOPS = int(os.environ.get("RESOURCEHUB_PROXY_HOPS", "0") or 0)
+DUMMY_SALT = secrets.token_bytes(16)
+email_sending = set()
+
+
+def reject_json_constant(name):
+    raise ValueError("Numbers must be finite.")
+
+
+def parse_finite_float(text):
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("Numbers must be finite.")
+    return value
+
+
+def purge_expired():
+    """Drop expired sessions, codes and rate-limit records. Call while holding LOCK."""
+    now = time.time()
+    for token in [t for t, s in sessions.items()
+                  if not isinstance(s, dict) or s.get("expires", 0) <= now]:
+        sessions.pop(token, None)
+    for key in [k for k, c in email_challenges.items() if c.get("expires", 0) < now - 3600]:
+        email_challenges.pop(key, None)
+    for key in [k for k, sent in email_ip_sends.items() if sent < now - 3600]:
+        email_ip_sends.pop(key, None)
+    for key in [k for k, r in LOGIN_ATTEMPTS.items()
+                if r["locked_until"] < now and now - r["window_start"] >= LOGIN_FAILURE_WINDOW]:
+        LOGIN_ATTEMPTS.pop(key, None)
+
+
+def prehash_password(path, data, ip):
+    """Run PBKDF2 outside LOCK so one sign-in cannot freeze every shop.
+
+    Unknown usernames are hashed with a dummy salt, so response time does not
+    reveal whether an account exists. Returns None when no hashing is needed.
+    """
+    username, password = data.get("username"), data.get("password")
+    if not isinstance(username, str) or not isinstance(password, str):
+        return None
+    if path == "/api/register":
+        if len(password) < 10:
+            return None
+        salt = secrets.token_bytes(16)
+    elif path == "/api/login":
+        if login_retry_after(ip):
+            return None
+        user = users.get(username.strip().lower())
+        try:
+            salt = bytes.fromhex(user["salt"]) if user else DUMMY_SALT
+        except (KeyError, TypeError, ValueError):
+            return None
+    else:
+        return None
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_ROUNDS)
+    return {"salt": salt, "digest": digest}
+
+
+PASSWORD_MIN_LENGTH = 10
+PASSWORD_MAX_LENGTH = 200
+RESET_TTL = 15 * 60
+reset_challenges = {}
+reset_ip_sends = {}
+
+
+def hash_new_password(password):
+    """Return (salt, digest) for a new password. Call outside LOCK; hashing is slow."""
+    salt = secrets.token_bytes(16)
+    return salt, hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_ROUNDS)
+
+
+def sign_out_user(username, keep_token=None):
+    """End every session of a user, except one optional token. Call while holding LOCK."""
+    for token, session in list(sessions.items()):
+        if isinstance(session, dict) and session.get("username") == username and token != keep_token:
+            sessions.pop(token, None)
+
+
+def check_new_password(password):
+    if not isinstance(password, str):
+        raise ValueError("Enter a new password.")
+    if len(password) < PASSWORD_MIN_LENGTH or len(password) > PASSWORD_MAX_LENGTH:
+        raise ValueError(f"Use a password with {PASSWORD_MIN_LENGTH} to {PASSWORD_MAX_LENGTH} characters.")
+
+
+def send_reset_email(username, target, code):
+    """Runs in a background thread so response time never reveals whether an account exists."""
+    try:
+        deliver_email(target, "Your ResourceHub password reset code",
+                      f"Your password reset code is {code}. It expires in 15 minutes. "
+                      "If you did not ask for this, you can ignore this email.")
+    except Exception as error:
+        print(f"Could not send the password reset email: {error}")
+        with LOCK:
+            challenge = reset_challenges.get(username)
+            if challenge and challenge["code"] == code:
+                reset_challenges.pop(username, None)
+
 
 PAGE = r'''<!doctype html>
 <html lang="en">
@@ -410,9 +505,9 @@ dialog::backdrop{background:#16212b73}
     </div>
     <section class="landing-features" aria-label="What ResourceHub does"><article class="landing-feature"><h2>Track every item</h2><p>See how many units you stocked, how many went out, and how many remain. Get a restock alert when an item runs low.</p></article><article class="landing-feature"><h2>Record sales, loans and returns</h2><p>Staff log each transaction in seconds. Owners control products, prices and staff accounts.</p></article><article class="landing-feature"><h2>Report and back up</h2><p>Owners can review sales and stock value, export reports to CSV, and download a backup of the shop’s data.</p></article></section>
   </section>
-  <section class="auth-screen" id="authScreen" hidden><div class="auth-card"><button class="auth-back" type="button" id="backLanding">← Back to ResourceHub</button><div class="auth-brand"><div class="brand-mark" data-shop-logo><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5 12 4l8 4.5v9L12 22l-8-4.5zM4 8.5l8 4.5 8-4.5M12 13v9m-8-13 8 4.5 8-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><img class="shop-logo" alt="Shop logo" hidden></div><div><span id="authBrandName">ResourceHub</span><small style="display:block;color:#718096;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase">Vendor stock desk</small></div></div><h1 id="authTitle">Welcome back</h1><p id="authSubtitle">Sign in to manage shop items and stock.</p><div class="tabs auth-tabs"><button class="tab active" type="button" data-auth-mode="login">Sign in</button><button class="tab" type="button" id="registerTab" data-auth-mode="register">Create owner account</button></div><form id="authForm"><div class="field" id="nameField" hidden><label for="authName">Your name</label><input id="authName" autocomplete="name" maxlength="80"></div><div class="field"><label for="authUsername">Username</label><input id="authUsername" autocomplete="username" minlength="3" maxlength="40" required></div><div class="field"><label for="authPassword">Password</label><input id="authPassword" type="password" autocomplete="current-password" minlength="10" required></div><button class="btn full" type="submit" id="authSubmit">Sign in</button><div class="auth-error" id="authError" role="alert"></div></form><div class="subtle">Your accounts and inventory are stored in the configured data directory.</div></div></section>
+  <section class="auth-screen" id="authScreen" hidden><div class="auth-card"><button class="auth-back" type="button" id="backLanding">← Back to ResourceHub</button><div class="auth-brand"><div class="brand-mark" data-shop-logo><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5 12 4l8 4.5v9L12 22l-8-4.5zM4 8.5l8 4.5 8-4.5M12 13v9m-8-13 8 4.5 8-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><img class="shop-logo" alt="Shop logo" hidden></div><div><span id="authBrandName">ResourceHub</span><small style="display:block;color:#718096;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase">Vendor stock desk</small></div></div><h1 id="authTitle">Welcome back</h1><p id="authSubtitle">Sign in to manage shop items and stock.</p><div class="tabs auth-tabs"><button class="tab active" type="button" data-auth-mode="login">Sign in</button><button class="tab" type="button" id="registerTab" data-auth-mode="register">Create owner account</button></div><form id="authForm"><div class="field" id="nameField" hidden><label for="authName">Your name</label><input id="authName" autocomplete="name" maxlength="80"></div><div class="field"><label for="authUsername">Username</label><input id="authUsername" autocomplete="username" minlength="3" maxlength="40" required></div><div class="field"><label for="authPassword">Password</label><input id="authPassword" type="password" autocomplete="current-password" minlength="10" required></div><button class="btn full" type="submit" id="authSubmit">Sign in</button><div class="auth-error" id="authError" role="alert"></div></form><button class="auth-back" type="button" id="forgotLink" style="margin:14px 0 0">Forgot your password?</button><form id="resetForm" hidden><h2 style="font-size:17px;margin:0 0 4px">Reset your password</h2><p class="subtle" style="margin:0 0 14px">Owners get a code at the email address used to register. Staff: ask your shop owner to reset your password.</p><div class="field"><label for="resetUsername">Username</label><input id="resetUsername" autocomplete="username" maxlength="40" required></div><button class="btn secondary full" type="button" id="resetSend">Email me a code</button><div class="field" style="margin-top:14px"><label for="resetCode">Code from the email</label><input id="resetCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required></div><div class="field"><label for="resetPassword">New password (at least 10 characters)</label><input id="resetPassword" type="password" minlength="10" autocomplete="new-password" required></div><button class="btn full" type="submit">Set new password</button><div class="auth-error" id="resetMessage" role="status"></div><button class="auth-back" type="button" id="resetBack" style="margin:0">Back to sign in</button></form><div class="subtle">Your accounts and inventory are stored in the configured data directory.</div></div></section>
   <div id="appScreen" hidden>
-  <header class="topbar"><div class="brand"><div class="brand-mark" data-shop-logo><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5 12 4l8 4.5v9L12 22l-8-4.5zM4 8.5l8 4.5 8-4.5M12 13v9m-8-13 8 4.5 8-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><img class="shop-logo" alt="Shop logo" hidden></div><div><span id="appBrandName">ResourceHub</span><small>Digital vendor stock desk</small></div></div><div class="top-right"><span class="live"></span><span class="status-text">Inventory system online</span><span class="account-name" id="accountName"></span><button class="logout" id="shopSettingsButton" hidden>Shop settings</button><button class="logout" id="staffButton" hidden>Manage staff</button><button class="logout" id="logoutButton">Sign out</button></div></header>
+  <header class="topbar"><div class="brand"><div class="brand-mark" data-shop-logo><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5 12 4l8 4.5v9L12 22l-8-4.5zM4 8.5l8 4.5 8-4.5M12 13v9m-8-13 8 4.5 8-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><img class="shop-logo" alt="Shop logo" hidden></div><div><span id="appBrandName">ResourceHub</span><small>Digital vendor stock desk</small></div></div><div class="top-right"><span class="live"></span><span class="status-text">Inventory system online</span><span class="account-name" id="accountName"></span><button class="logout" id="shopSettingsButton" hidden>Shop settings</button><button class="logout" id="staffButton" hidden>Manage staff</button><button class="logout" id="passwordButton" type="button">Change password</button><button class="logout" id="logoutButton">Sign out</button></div></header>
   <main>
     <section class="heading"><div><div class="eyebrow">Operations overview</div><h1>Vendor stock desk</h1><p>Track items in stock, disbursements, and what remains to help plan restocking.</p></div><div class="today" id="today"></div></section>
     <section class="stats" aria-label="Inventory summary"><article class="stat"><div class="stat-label">Total items</div><div class="stat-value" id="totalUnits">—</div><div class="stat-foot">units across all resources</div></article><article class="stat"><div class="stat-label">Remaining in stock</div><div class="stat-value" id="availableUnits">—</div><div class="stat-foot">units currently in stock</div></article><article class="stat"><div class="stat-label">Disbursed / on loan</div><div class="stat-value" id="borrowedUnits">—</div><div class="stat-foot">units currently disbursed or on loan</div></article><article class="stat"><div class="stat-label">Item types</div><div class="stat-value" id="resourceCount">—</div><div class="stat-foot">items in your catalog</div></article></section>
@@ -440,6 +535,7 @@ dialog::backdrop{background:#16212b73}
   <div id="testEmailMessage" class="form-message" role="status"></div>
 </div>
 </form></dialog>
+  <dialog id="passwordDialog" style="border:0;border-radius:15px;padding:24px;width:min(440px,calc(100% - 28px));box-shadow:0 25px 80px #101b2d33"><form id="passwordForm"><h2 style="margin:0 0 5px">Change password</h2><p class="subtle" style="margin:0 0 16px">You stay signed in on this device. Your other devices are signed out.</p><div class="field"><label for="currentPassword">Current password</label><input id="currentPassword" type="password" autocomplete="current-password" required></div><div class="field"><label for="newPassword">New password (at least 10 characters)</label><input id="newPassword" type="password" minlength="10" autocomplete="new-password" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelPassword">Cancel</button><button class="btn" type="submit">Save new password</button></div><div id="passwordMessage" class="form-message" role="status"></div></form></dialog>
   <dialog id="confirmDialog" style="border:0;border-radius:15px;padding:24px;width:min(420px,calc(100% - 28px));box-shadow:0 25px 80px #101b2d33"><h2 id="confirmTitle" style="margin:0 0 6px">Confirm inventory change</h2><p id="confirmDetail" class="subtle" style="margin:0 0 20px"></p><div style="display:flex;gap:9px;justify-content:flex-end"><button type="button" class="btn secondary" id="confirmCancel">Cancel</button><button type="button" class="btn" id="confirmOk">Confirm</button></div></dialog>
   <script>
     const $ = selector => document.querySelector(selector);
@@ -468,7 +564,7 @@ dialog::backdrop{background:#16212b73}
     async function loadReports(){try{const report=await api('/api/reports');$('#reportMessage').textContent='';$('#reportPeriod').textContent=`Sales, best sellers, and stock value · ${report.period}`;$('#monthRevenue').textContent=money(report.month_revenue);$('#monthUnits').textContent=report.month_units;$('#lifetimeRevenue').textContent=money(report.lifetime_revenue);$('#lifetimeUnits').textContent=`${report.lifetime_units} units sold`;$('#stockValue').textContent=money(report.stock_value);$('#bestSellerRows').innerHTML=report.best_sellers.length?report.best_sellers.map(item=>`<tr><td><div class="resource-name">${esc(item.name)}</div><div class="resource-id">${esc(item.id)}</div></td><td>${item.units}</td><td>${money(item.revenue)}</td></tr>`).join(''):'<tr><td colspan="3" class="empty">No sales recorded yet.</td></tr>'}catch(error){$('#reportMessage').className='form-message error';$('#reportMessage').textContent=error.message}}
     $('#exportReport').addEventListener('click',async()=>{try{const response=await fetch('/api/reports/export.csv');if(!response.ok){const data=await response.json();throw new Error(data.error||'Could not export report.')}const file=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=file;link.download='resourcehub-report.csv';link.click();URL.revokeObjectURL(file)}catch(error){$('#reportMessage').className='form-message error';$('#reportMessage').textContent=error.message}});
     let auditTimer;
-    async function loadAudit(){try{const result=await api('/api/audit?q='+encodeURIComponent($('#auditSearch').value));$('#auditMessage').textContent='';const labels={item_added:'Item added',item_updated:'Item updated',item_deleted:'Item deleted',stock_in:'Stock-in',sale:'Sale',loan:'Loan',return:'Return',staff_created:'Staff added',staff_removed:'Staff removed',settings_changed:'Settings changed'};$('#auditRows').innerHTML=result.audit.length?result.audit.map(row=>`<tr><td>${esc(new Date(row.created_at).toLocaleString())}</td><td>${esc(row.actor)}<div class="resource-id">${esc(row.role)}</div></td><td>${esc(labels[row.action]||row.action)}</td><td>${esc(row.target||'—')}</td><td style="white-space:normal;min-width:240px">${esc(row.detail)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No audit entries match.</td></tr>'}catch(error){$('#auditMessage').className='form-message error';$('#auditMessage').textContent=error.message}}
+    async function loadAudit(){try{const result=await api('/api/audit?q='+encodeURIComponent($('#auditSearch').value));$('#auditMessage').textContent='';const labels={item_added:'Item added',item_updated:'Item updated',item_deleted:'Item deleted',stock_in:'Stock-in',sale:'Sale',loan:'Loan',return:'Return',staff_created:'Staff added',staff_removed:'Staff removed',settings_changed:'Settings changed',password_changed:'Password changed',staff_password_reset:'Staff password reset',password_reset:'Password reset'};$('#auditRows').innerHTML=result.audit.length?result.audit.map(row=>`<tr><td>${esc(new Date(row.created_at).toLocaleString())}</td><td>${esc(row.actor)}<div class="resource-id">${esc(row.role)}</div></td><td>${esc(labels[row.action]||row.action)}</td><td>${esc(row.target||'—')}</td><td style="white-space:normal;min-width:240px">${esc(row.detail)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">No audit entries match.</td></tr>'}catch(error){$('#auditMessage').className='form-message error';$('#auditMessage').textContent=error.message}}
     $('#auditSearch').addEventListener('input',()=>{clearTimeout(auditTimer);auditTimer=setTimeout(loadAudit,180)});
     $('#exportAudit').addEventListener('click',async()=>{try{const response=await fetch('/api/audit/export.csv?q='+encodeURIComponent($('#auditSearch').value));if(!response.ok){const data=await response.json();throw new Error(data.error||'Could not export the audit log.')}const file=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=file;link.download='resourcehub-audit-log.csv';link.click();setTimeout(()=>URL.revokeObjectURL(file),1000)}catch(error){$('#auditMessage').className='form-message error';$('#auditMessage').textContent=error.message}});
     $('#backupButton').addEventListener('click',async()=>{try{const response=await fetch('/api/backup');if(!response.ok){const data=await response.json();throw new Error(data.error||'Could not download the backup.')}const file=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=file;link.download='resourcehub-backup.zip';link.click();setTimeout(()=>URL.revokeObjectURL(file),1000)}catch(error){$('#reportMessage').className='form-message error';$('#reportMessage').textContent=error.message}});
@@ -481,12 +577,22 @@ dialog::backdrop{background:#16212b73}
     function renderTurnstileWidget(){const target=$('#turnstileContainer');if(target&&turnstileSiteKey&&window.turnstile&&!target.dataset.widget){window.turnstile.render(target,{sitekey:turnstileSiteKey});target.dataset.widget='1'}}
     function setAuthMode(next){if(next==='register'&&!registrationOpen)next='login';authMode=next;const registering=next==='register';if(registering&&!$('#registrationFields'))$('#nameField').insertAdjacentHTML('afterend','<div id="registrationFields"><div class="field"><label for="companyName">Company name</label><input id="companyName" maxlength="100" required></div><div class="field"><label for="companyProducts">What do you sell?</label><input id="companyProducts" maxlength="120" placeholder="Products or services"></div><div class="field"><label for="companyPhone">Company phone</label><input id="companyPhone" autocomplete="tel" maxlength="24" required></div><div class="field"><label for="companyEmail">Company email</label><input id="companyEmail" type="email" autocomplete="email" maxlength="254" required></div><div class="field" style="display:flex;gap:8px"><input id="emailCode" inputmode="numeric" maxlength="6" placeholder="Email code" required><button class="btn secondary" id="sendEmailCode" type="button">Send code</button></div><div id="turnstileContainer"></div></div>');if($('#registrationFields')){$('#registrationFields').hidden=!registering;$('#registrationFields').querySelectorAll('input').forEach(input=>input.required=registering)}renderTurnstileWidget();$('#authTitle').textContent=registering?'Register your company':'Welcome back';$('#authSubtitle').textContent=registering?'Create a shop account. Verify your email and complete the bot check.':'Sign in to manage your shop and staff.';if(registering&&!turnstileSiteKey)$('#authSubtitle').textContent='Signup setup is incomplete: the site owner must configure Cloudflare Turnstile.';$('#nameField').hidden=!registering;$('#authName').required=registering;$('#authPassword').autocomplete=registering?'new-password':'current-password';$('#authSubmit').textContent=registering?'Create shop account':'Sign in';$('#registerTab').hidden=!registrationOpen;document.querySelectorAll('[data-auth-mode]').forEach(tab=>tab.classList.toggle('active',tab.dataset.authMode===next));$('#authError').textContent=''}
     function showApp(name,role){currentRole=role||'staff';$('#accountName').textContent=`${name} · ${currentRole}`;$('#staffButton').hidden=currentRole!=='owner';$('#shopSettingsButton').hidden=currentRole!=='owner';$('#restockButton').hidden=currentRole!=='owner';$('#addButton').hidden=currentRole!=='owner';$('#exportReport').hidden=currentRole!=='owner';$('#backupButton').hidden=currentRole!=='owner';$('#reportsPanel').hidden=currentRole!=='owner';$('#auditPanel').hidden=currentRole!=='owner';$('#landingScreen').hidden=true;$('#authScreen').hidden=true;$('#appScreen').hidden=false;refresh().catch(error=>showToast(error.message))}
+    const baseSetAuthMode=setAuthMode;
+    setAuthMode=function(next){baseSetAuthMode(next);$('#resetForm').hidden=true;$('#authForm').hidden=false;document.querySelector('.auth-tabs').hidden=false;$('#forgotLink').hidden=authMode!=='login'};
+    $('#forgotLink').addEventListener('click',()=>{$('#authForm').hidden=true;document.querySelector('.auth-tabs').hidden=true;$('#forgotLink').hidden=true;$('#resetForm').hidden=false;$('#resetUsername').value=$('#authUsername').value;$('#authTitle').textContent='Reset your password';$('#authSubtitle').textContent='We email a code to the address on your owner account.';$('#resetMessage').textContent='';$('#authError').textContent=''});
+    $('#resetBack').addEventListener('click',()=>setAuthMode('login'));
+    $('#resetSend').addEventListener('click',async()=>{const box=$('#resetMessage');box.style.color='var(--red)';box.textContent='';try{const result=await api('/api/password-reset/request',{username:$('#resetUsername').value});box.textContent=result.message;box.style.color='var(--green)'}catch(error){box.textContent=error.message}});
+    $('#resetForm').addEventListener('submit',async event=>{event.preventDefault();const box=$('#resetMessage');box.style.color='var(--red)';box.textContent='';try{const result=await api('/api/password-reset/confirm',{username:$('#resetUsername').value,code:$('#resetCode').value,new_password:$('#resetPassword').value});event.target.reset();setAuthMode('login');$('#authError').style.color='var(--green)';$('#authError').textContent=result.message}catch(error){box.textContent=error.message}});
+    $('#passwordButton').addEventListener('click',()=>{$('#passwordForm').reset();$('#passwordMessage').className='form-message';$('#passwordMessage').textContent='';$('#passwordDialog').showModal()});
+    $('#cancelPassword').addEventListener('click',()=>$('#passwordDialog').close());
+    $('#passwordForm').addEventListener('submit',async event=>{event.preventDefault();const box=$('#passwordMessage');box.className='form-message';box.textContent='';try{const result=await api('/api/change-password',{current_password:$('#currentPassword').value,new_password:$('#newPassword').value});$('#passwordDialog').close();event.target.reset();showToast(result.message)}catch(error){box.classList.add('error');box.textContent=error.message}});
+    $('#staffRows').addEventListener('click',async event=>{const button=event.target.closest('.reset-staff');if(!button)return;if(!window.confirm(`Reset the password for ${button.dataset.username}? A temporary password will be shown once.`))return;const message=$('#staffMessage');try{const result=await api('/api/staff/reset-password',{username:button.dataset.username});message.className='form-message';message.textContent=result.message}catch(error){message.className='form-message error';message.textContent=error.message}});
     document.querySelectorAll('[data-open-auth]').forEach(button=>button.addEventListener('click',()=>{$('#landingScreen').hidden=true;$('#authScreen').hidden=false;setAuthMode('login')}));
     $('#backLanding').addEventListener('click',()=>{$('#authScreen').hidden=true;$('#landingScreen').hidden=false});
     document.querySelectorAll('[data-auth-mode]').forEach(tab=>tab.addEventListener('click',()=>setAuthMode(tab.dataset.authMode)));
     $('#authForm').addEventListener('submit',async event=>{event.preventDefault();const errorBox=$('#authError');errorBox.textContent='';const payload={username:$('#authUsername').value,password:$('#authPassword').value};if(authMode==='register'){payload.name=$('#authName').value;payload.company_name=$('#companyName').value;payload.products=$('#companyProducts').value;payload.phone=$('#companyPhone').value;payload.email=$('#companyEmail').value;payload.email_code=$('#emailCode').value;payload.turnstile_token=document.querySelector('[name="cf-turnstile-response"]')?.value||''}try{const result=await api('/api/'+(authMode==='register'?'register':'login'),payload);event.target.reset();showApp(result.name,result.role);registrationOpen=true}catch(error){errorBox.textContent=error.message}});
-    $('#authForm').addEventListener('click',async event=>{if(event.target.id!=='sendEmailCode')return;const errorBox=$('#authError');errorBox.textContent='';try{const result=await api('/api/send-verification',{email:$('#companyEmail').value});errorBox.textContent=result.message;errorBox.style.color='var(--green)'}catch(error){errorBox.textContent=error.message;errorBox.style.color='var(--red)'}});
-    $('#shopSettingsButton').addEventListener('click',()=>{const settings=state.settings;$('#shopName').value=settings.shop_name;$('#shopColor').value=settings.brand_color;$('#shopCurrency').value=settings.currency;$('#shopLogo').value='';pendingLogo=null;$('#shopLogoPreview').src=settings.logo_data||'';$('#shopLogoPreview').hidden=!settings.logo_data;$('#shopSettingsMessage').textContent='';$('#shopSettingsDialog').showModal()});$('#cancelShopSettings').addEventListener('click',()=>$('#shopSettingsDialog').close());$('#shopLogo').addEventListener('change',()=>{const file=$('#shopLogo').files[0];if(!file)return;if(file.size>250000){$('#shopSettingsMessage').className='form-message error';$('#shopSettingsMessage').textContent='Choose a logo no larger than 250 KB.';$('#shopLogo').value='';return}const reader=new FileReader();reader.onload=()=>{pendingLogo=reader.result;$('#shopLogoPreview').src=pendingLogo;$('#shopLogoPreview').hidden=false;$('#shopSettingsMessage').textContent=''};reader.onerror=()=>{$('#shopSettingsMessage').className='form-message error';$('#shopSettingsMessage').textContent='Could not read this image.'};reader.readAsDataURL(file)});$('#removeShopLogo').addEventListener('click',()=>{pendingLogo='';$('#shopLogo').value='';$('#shopLogoPreview').removeAttribute('src');$('#shopLogoPreview').hidden=true});$('#shopSettingsForm').addEventListener('submit',async event=>{event.preventDefault();const message=$('#shopSettingsMessage');message.className='form-message';message.textContent='';try{const result=await api('/api/settings',{shop_name:$('#shopName').value,brand_color:$('#shopColor').value,currency:$('#shopCurrency').value,logo_data:pendingLogo===null?state.settings.logo_data:pendingLogo});pendingLogo=null;$('#shopSettingsDialog').close();await refresh();showToast(result.message)}catch(error){message.classList.add('error');message.textContent=error.message}});$('#staffButton').addEventListener('click',async()=>{try{await loadStaff();$('#staffMessage').textContent='';$('#staffDialog').showModal()}catch(error){showToast(error.message)}});$('#closeStaff').addEventListener('click',()=>$('#staffDialog').close());$('#staffRows').addEventListener('click',async event=>{const button=event.target.closest('.remove-staff');if(!button)return;if(!window.confirm(`Remove staff account ${button.dataset.username}?`))return;try{const result=await api('/api/staff/delete',{username:button.dataset.username});await loadStaff();$('#staffMessage').textContent=result.message}catch(error){$('#staffMessage').className='form-message error';$('#staffMessage').textContent=error.message}});async function loadStaff(){const result=await api('/api/staff');$('#staffRows').innerHTML=result.staff.length?result.staff.map(person=>`<tr><td>${esc(person.name)}</td><td>${esc(person.username)}</td><td>Staff</td><td><button class="btn secondary remove-staff" data-username="${esc(person.username)}" type="button">Remove</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty">No staff accounts yet.</td></tr>'}$('#staffForm').addEventListener('submit',async event=>{event.preventDefault();const message=$('#staffMessage');message.className='form-message';message.textContent='';try{const result=await api('/api/staff',{name:$('#staffName').value,username:$('#staffUsername').value,password:$('#staffPassword').value});event.target.reset();await loadStaff();message.textContent=result.message}catch(error){message.classList.add('error');message.textContent=error.message}});$('#logoutButton').addEventListener('click',async()=>{try{await api('/api/logout',{});$('#appScreen').hidden=true;$('#authScreen').hidden=true;$('#landingScreen').hidden=false;$('#authPassword').value='';$('#staffButton').hidden=true;$('#shopSettingsButton').hidden=true;$('#registerTab').hidden=!registrationOpen;setAuthMode('login')}catch(error){showToast(error.message)}});
+    $('#authForm').addEventListener('click',async event=>{if(event.target.id!=='sendEmailCode')return;const errorBox=$('#authError');errorBox.textContent='';try{const result=await api('/api/send-verification',{email:$('#companyEmail').value,turnstile_token:document.querySelector('[name="cf-turnstile-response"]')?.value||''});errorBox.textContent=result.message;errorBox.style.color='var(--green)'}catch(error){errorBox.textContent=error.message;errorBox.style.color='var(--red)'}finally{if(window.turnstile)window.turnstile.reset()}});
+    $('#shopSettingsButton').addEventListener('click',()=>{const settings=state.settings;$('#shopName').value=settings.shop_name;$('#shopColor').value=settings.brand_color;$('#shopCurrency').value=settings.currency;$('#shopLogo').value='';pendingLogo=null;$('#shopLogoPreview').src=settings.logo_data||'';$('#shopLogoPreview').hidden=!settings.logo_data;$('#shopSettingsMessage').textContent='';$('#shopSettingsDialog').showModal()});$('#cancelShopSettings').addEventListener('click',()=>$('#shopSettingsDialog').close());$('#shopLogo').addEventListener('change',()=>{const file=$('#shopLogo').files[0];if(!file)return;if(file.size>250000){$('#shopSettingsMessage').className='form-message error';$('#shopSettingsMessage').textContent='Choose a logo no larger than 250 KB.';$('#shopLogo').value='';return}const reader=new FileReader();reader.onload=()=>{pendingLogo=reader.result;$('#shopLogoPreview').src=pendingLogo;$('#shopLogoPreview').hidden=false;$('#shopSettingsMessage').textContent=''};reader.onerror=()=>{$('#shopSettingsMessage').className='form-message error';$('#shopSettingsMessage').textContent='Could not read this image.'};reader.readAsDataURL(file)});$('#removeShopLogo').addEventListener('click',()=>{pendingLogo='';$('#shopLogo').value='';$('#shopLogoPreview').removeAttribute('src');$('#shopLogoPreview').hidden=true});$('#shopSettingsForm').addEventListener('submit',async event=>{event.preventDefault();const message=$('#shopSettingsMessage');message.className='form-message';message.textContent='';try{const result=await api('/api/settings',{shop_name:$('#shopName').value,brand_color:$('#shopColor').value,currency:$('#shopCurrency').value,logo_data:pendingLogo===null?state.settings.logo_data:pendingLogo});pendingLogo=null;$('#shopSettingsDialog').close();await refresh();showToast(result.message)}catch(error){message.classList.add('error');message.textContent=error.message}});$('#staffButton').addEventListener('click',async()=>{try{await loadStaff();$('#staffMessage').textContent='';$('#staffDialog').showModal()}catch(error){showToast(error.message)}});$('#closeStaff').addEventListener('click',()=>$('#staffDialog').close());$('#staffRows').addEventListener('click',async event=>{const button=event.target.closest('.remove-staff');if(!button)return;if(!window.confirm(`Remove staff account ${button.dataset.username}?`))return;try{const result=await api('/api/staff/delete',{username:button.dataset.username});await loadStaff();$('#staffMessage').textContent=result.message}catch(error){$('#staffMessage').className='form-message error';$('#staffMessage').textContent=error.message}});async function loadStaff(){const result=await api('/api/staff');$('#staffRows').innerHTML=result.staff.length?result.staff.map(person=>`<tr><td>${esc(person.name)}</td><td>${esc(person.username)}</td><td>Staff</td><td><button class="btn secondary reset-staff" data-username="${esc(person.username)}" type="button">Reset password</button> <button class="btn secondary remove-staff" data-username="${esc(person.username)}" type="button">Remove</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty">No staff accounts yet.</td></tr>'}$('#staffForm').addEventListener('submit',async event=>{event.preventDefault();const message=$('#staffMessage');message.className='form-message';message.textContent='';try{const result=await api('/api/staff',{name:$('#staffName').value,username:$('#staffUsername').value,password:$('#staffPassword').value});event.target.reset();await loadStaff();message.textContent=result.message}catch(error){message.classList.add('error');message.textContent=error.message}});$('#logoutButton').addEventListener('click',async()=>{try{await api('/api/logout',{});$('#appScreen').hidden=true;$('#authScreen').hidden=true;$('#landingScreen').hidden=false;$('#authPassword').value='';$('#staffButton').hidden=true;$('#shopSettingsButton').hidden=true;$('#registerTab').hidden=!registrationOpen;setAuthMode('login')}catch(error){showToast(error.message)}});
     api('/api/me').then(me=>{registrationOpen=me.registration_open;turnstileSiteKey=me.turnstile_site_key||'';applyShopSettings(me.settings);$('#registerTab').hidden=!registrationOpen;if(turnstileSiteKey){const script=document.createElement('script');script.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';script.async=true;script.defer=true;document.head.appendChild(script);script.onload=renderTurnstileWidget}if(me.authenticated)showApp(me.name,me.role);else setAuthMode('login')}).catch(error=>showToast(error.message));setInterval(()=>{if(!$('#appScreen').hidden)refresh().catch(()=>{})},30000);
   
 document.querySelector('#testEmailButton').addEventListener('click', async () => {
@@ -708,6 +814,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         self.send_header("Cache-Control", "no-store")
         for name, value in (headers or {}).items():
             self.send_header(name, value)
@@ -721,7 +830,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Request body is empty or too large.")
             if "application/json" not in self.headers.get("Content-Type", ""):
                 raise ValueError("Send request data as JSON.")
-            data = json.loads(self.rfile.read(size))
+            data = json.loads(self.rfile.read(size), parse_constant=reject_json_constant,
+                              parse_float=parse_finite_float)
             if not isinstance(data, dict):
                 raise ValueError("Request data must be a JSON object.")
             return data
@@ -822,6 +932,21 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.respond(404, {"error": "Page not found."})
 
+    def client_ip(self):
+        """Return the visitor's IP. Behind a reverse proxy, set RESOURCEHUB_PROXY_HOPS
+        to the number of trusted proxies (1 on Render) so limits apply per visitor."""
+        address = self.client_address
+        peer = address[0]
+        if PROXY_HOPS < 1:
+            return peer
+        parts = [p.strip() for p in self.headers.get("X-Forwarded-For", "").split(",") if p.strip()]
+        if len(parts) < PROXY_HOPS:
+            return peer
+        try:
+            return str(ipaddress.ip_address(parts[-PROXY_HOPS]))
+        except ValueError:
+            return peer
+
     def current_user(self):
         """Return a valid account session and extend its inactivity timeout."""
         from http.cookies import SimpleCookie
@@ -856,6 +981,15 @@ class Handler(BaseHTTPRequestHandler):
         activate_shop(shop_id)
         session["expires"] = now + SESSION_TTL
         return username
+
+    def session_token(self):
+        from http.cookies import SimpleCookie
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+            return cookie[SESSION_COOKIE].value
+        except (KeyError, TypeError, ValueError):
+            return None
 
     def set_session(self, username):
         token = secrets.token_urlsafe(32)
@@ -903,6 +1037,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in ("/api/register", "/api/login", "/api/logout"):
             self.handle_auth(path)
+            return
+        if path == "/api/change-password":
+            self.handle_change_password()
+            return
+        if path == "/api/staff/reset-password":
+            self.handle_staff_password_reset()
+            return
+        if path == "/api/password-reset/request":
+            self.handle_reset_request()
+            return
+        if path == "/api/password-reset/confirm":
+            self.handle_reset_confirm()
             return
         if path == "/api/staff":
             self.handle_staff_creation()
@@ -1059,21 +1205,211 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(email, str) or len(email) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
                 raise ValueError("Enter a valid email address.")
             email = email.strip().lower()
-            ip = self.client_address[0]
+            ip = self.client_ip()
+            if not verify_turnstile(data.get("turnstile_token", ""), ip):
+                raise ValueError("Complete the bot verification check and try again.")
+            now = time.time()
             with LOCK:
+                purge_expired()
                 previous = email_challenges.get(email)
-                if ((previous and previous.get("sent", 0) > time.time() - 60)
-                        or email_ip_sends.get(ip, 0) > time.time() - 60):
+                if (email in email_sending
+                        or (previous and previous.get("sent", 0) > now - 60)
+                        or email_ip_sends.get(ip, 0) > now - 60):
                     self.respond(429, {"error": "Wait one minute before requesting another code."})
                     return
-                send_email_code(email)
-                email_challenges[email]["sent"] = time.time()
-                email_ip_sends[ip] = time.time()
+                # Reserve the slot first, then send outside LOCK so a slow mail
+                # server cannot freeze every other shop.
+                email_sending.add(email)
+                email_ip_sends[ip] = now
+            try:
+                code = send_email_code(email)
+            except Exception:
+                with LOCK:
+                    email_sending.discard(email)
+                    email_ip_sends.pop(ip, None)
+                raise
+            with LOCK:
+                email_challenges[email] = {"code": code, "expires": time.time() + 600,
+                                           "attempts": 0, "sent": time.time()}
+                email_sending.discard(email)
             self.respond(200, {"message": "Verification code sent. Check your email."})
         except ValueError as error:
             self.respond(400, {"error": str(error)})
         except (OSError, RuntimeError, smtplib.SMTPException) as error:
             self.respond(503, {"error": str(error) or "Could not send the verification email."})
+
+    def handle_change_password(self):
+        try:
+            data = self.read_json(max_bytes=4_000)
+            current, new = data.get("current_password", ""), data.get("new_password", "")
+            if not isinstance(current, str) or not current:
+                raise ValueError("Enter your current password.")
+            check_new_password(new)
+            if new == current:
+                raise ValueError("Choose a new password that is different from the current one.")
+            ip = self.client_ip()
+            with LOCK:
+                username = self.current_user()
+                if not username:
+                    self.respond(401, {"error": "Your session expired. Please sign in again."})
+                    return
+                retry_after = login_retry_after(ip)
+                if retry_after:
+                    self.respond(429, {"error": "Too many failed attempts. Try again later."},
+                                 headers={"Retry-After": str(retry_after)})
+                    return
+                snapshot = dict(users[username])
+                token = self.session_token()
+            expected = bytes.fromhex(snapshot["password_hash"])
+            actual = hashlib.pbkdf2_hmac("sha256", current.encode("utf-8"),
+                                         bytes.fromhex(snapshot["salt"]), PASSWORD_ROUNDS)
+            if not hmac.compare_digest(actual, expected):
+                with LOCK:
+                    record_login_failure(ip)
+                self.respond(403, {"error": "Your current password is incorrect."})
+                return
+            salt, digest = hash_new_password(new)
+            with LOCK:
+                if (self.current_user() != username
+                        or users[username]["password_hash"] != snapshot["password_hash"]):
+                    self.respond(409, {"error": "Your account changed while saving. Please try again."})
+                    return
+                user = users[username]
+                old = (user["salt"], user["password_hash"])
+                user["salt"], user["password_hash"] = salt.hex(), digest.hex()
+                try:
+                    save_users()
+                except OSError as error:
+                    user["salt"], user["password_hash"] = old
+                    self.respond(500, {"error": f"Could not save the new password: {error}"})
+                    return
+                sign_out_user(username, keep_token=token)
+                LOGIN_ATTEMPTS.pop(ip, None)
+                audit_log(self, username, "password_changed", "", "changed by the user")
+            self.respond(200, {"message": "Password changed. Other devices were signed out."})
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
+
+    def handle_staff_password_reset(self):
+        try:
+            data = self.read_json(max_bytes=2_000)
+            target = data.get("username", "")
+            if not isinstance(target, str):
+                raise ValueError("Choose a valid staff username.")
+            target = target.strip().lower()
+            with LOCK:
+                actor = self.current_user()
+                if not actor:
+                    self.respond(401, {"error": "Your session expired. Please sign in again."})
+                    return
+                if users[actor]["role"] != "owner":
+                    self.respond(403, {"error": "Only the owner can reset staff passwords."})
+                    return
+                member = users.get(target)
+                if (not member or member.get("role") != "staff"
+                        or member.get("shop_id") != users[actor].get("shop_id")):
+                    self.respond(404, {"error": "Staff member not found in this shop."})
+                    return
+            temporary = secrets.token_urlsafe(9)
+            salt, digest = hash_new_password(temporary)
+            with LOCK:
+                if self.current_user() != actor or users.get(target) is not member:
+                    self.respond(409, {"error": "The account changed while saving. Please try again."})
+                    return
+                old = (member["salt"], member["password_hash"])
+                member["salt"], member["password_hash"] = salt.hex(), digest.hex()
+                try:
+                    save_users()
+                except OSError as error:
+                    member["salt"], member["password_hash"] = old
+                    self.respond(500, {"error": f"Could not reset this password: {error}"})
+                    return
+                sign_out_user(target)
+                audit_log(self, actor, "staff_password_reset", target)
+            self.respond(200, {"message": f"New password for {target}: {temporary}  Share it privately. "
+                                          "They can change it after signing in."})
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
+
+    def handle_reset_request(self):
+        try:
+            data = self.read_json(max_bytes=2_000)
+            username = data.get("username", "")
+            if not isinstance(username, str) or not username.strip():
+                raise ValueError("Enter your username.")
+            username = username.strip().lower()[:40]
+            smtp_settings()  # configuration problems are reported the same way for everyone
+            ip, now = self.client_ip(), time.time()
+            reply = {"message": "If that owner account has a recovery email, a code has been sent to it."}
+            with LOCK:
+                for key in [k for k, t in reset_ip_sends.items() if t < now - 3600]:
+                    reset_ip_sends.pop(key, None)
+                for key in [k for k, c in reset_challenges.items() if c["expires"] < now]:
+                    reset_challenges.pop(key, None)
+                if reset_ip_sends.get(ip, 0) > now - 60:
+                    self.respond(429, {"error": "Wait one minute before requesting another code."})
+                    return
+                reset_ip_sends[ip] = now
+                user = users.get(username)
+                target = user.get("email") if user and user.get("role") == "owner" else None
+                prior = reset_challenges.get(username)
+                if target and not (prior and prior["sent"] > now - 60):
+                    code = f"{secrets.randbelow(1_000_000):06d}"
+                    reset_challenges[username] = {"code": code, "expires": now + RESET_TTL,
+                                                  "attempts": 0, "sent": now}
+                    Thread(target=send_reset_email, args=(username, target, code), daemon=True).start()
+            self.respond(200, reply)
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
+        except RuntimeError as error:
+            self.respond(503, {"error": str(error)})
+
+    def handle_reset_confirm(self):
+        try:
+            data = self.read_json(max_bytes=4_000)
+            username, code, new = data.get("username", ""), data.get("code", ""), data.get("new_password", "")
+            if not isinstance(username, str) or not isinstance(code, str):
+                raise ValueError("Enter your username and the code from your email.")
+            check_new_password(new)
+            username, ip = username.strip().lower()[:40], self.client_ip()
+            invalid = "That code is invalid or expired. Request a new one."
+            with LOCK:
+                retry_after = login_retry_after(ip)
+                if retry_after:
+                    self.respond(429, {"error": "Too many failed attempts. Try again later."},
+                                 headers={"Retry-After": str(retry_after)})
+                    return
+                challenge = reset_challenges.get(username)
+                if (not challenge or challenge["expires"] < time.time() or challenge["attempts"] >= 5
+                        or not hmac.compare_digest(code.strip().encode("utf-8"), challenge["code"].encode("utf-8"))):
+                    if challenge:
+                        challenge["attempts"] += 1
+                    record_login_failure(ip)
+                    raise ValueError(invalid)
+                reset_challenges.pop(username, None)  # a code works once
+            salt, digest = hash_new_password(new)
+            with LOCK:
+                user = users.get(username)
+                if not user:
+                    raise ValueError(invalid)
+                old = (user["salt"], user["password_hash"])
+                user["salt"], user["password_hash"] = salt.hex(), digest.hex()
+                try:
+                    save_users()
+                except OSError as error:
+                    user["salt"], user["password_hash"] = old
+                    self.respond(500, {"error": f"Could not save the new password: {error}"})
+                    return
+                sign_out_user(username)
+                LOGIN_ATTEMPTS.pop(ip, None)
+                try:
+                    activate_shop(user["shop_id"])
+                    audit_log(self, username, "password_reset", "", "reset with an emailed code")
+                except (RuntimeError, OSError, sqlite3.Error):
+                    pass
+            self.respond(200, {"message": "Password updated. Sign in with your new password."})
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
 
     def handle_staff_deletion(self):
         try:
@@ -1159,7 +1495,9 @@ class Handler(BaseHTTPRequestHandler):
     def handle_auth(self, path):
         try:
             data = self.read_json()
+            hashed = prehash_password(path, data, self.client_ip())
             with LOCK:
+                purge_expired()
                 if path == "/api/logout":
                     cookie = self.clear_session()
                     self.respond(200, {"message": "You have been signed out."}, headers={"Set-Cookie": cookie})
@@ -1170,7 +1508,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(username, str) or not isinstance(password, str):
                     raise ValueError("Enter a username and password.")
                 username = username.strip().lower()
-                login_ip = self.client_address[0]
+                login_ip = self.client_ip()
 
                 if path == "/api/login":
                     retry_after = login_retry_after(login_ip)
@@ -1211,17 +1549,20 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("Use a password with at least 10 characters.")
                     challenge = email_challenges.get(email)
                     if (not challenge or challenge["expires"] < time.time()
-                            or challenge["attempts"] >= 5 or not hmac.compare_digest(email_code, challenge["code"])):
+                            or challenge["attempts"] >= 5 or not hmac.compare_digest(email_code.encode("utf-8"), challenge["code"].encode("utf-8"))):
                         if challenge:
                             challenge["attempts"] += 1
                         raise ValueError("Enter the valid email verification code sent to your company email.")
-                    if not verify_turnstile(data.get("turnstile_token", ""), self.client_address[0]):
+                    if not verify_turnstile(data.get("turnstile_token", ""), self.client_ip()):
                         raise ValueError("Complete the bot verification check and try again.")
                     if username in users:
                         self.respond(409, {"error": "That username is already registered."})
                         return
-                    salt = secrets.token_bytes(16)
-                    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_ROUNDS)
+                    if hashed is None:
+                        salt = secrets.token_bytes(16)
+                        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_ROUNDS)
+                    else:
+                        salt, digest = hashed["salt"], hashed["digest"]
                     shop_id = secrets.token_hex(8)
                     slug_base = re.sub(r"[^a-z0-9]+", "-", company.lower()).strip("-")[:50] or "shop"
                     slug = slug_base
@@ -1248,8 +1589,11 @@ class Handler(BaseHTTPRequestHandler):
                         self.respond(401, {"error": "Username or password is incorrect."})
                         return
                     expected = bytes.fromhex(user["password_hash"])
-                    actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
-                                                  bytes.fromhex(user["salt"]), PASSWORD_ROUNDS)
+                    user_salt = bytes.fromhex(user["salt"])
+                    if hashed is not None and hashed["salt"] == user_salt:
+                        actual = hashed["digest"]
+                    else:
+                        actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), user_salt, PASSWORD_ROUNDS)
                     if not hmac.compare_digest(actual, expected):
                         record_login_failure(login_ip)
                         self.respond(401, {"error": "Username or password is incorrect."})
