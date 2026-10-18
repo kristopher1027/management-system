@@ -12,3 +12,6 @@ data.json
 data.json
 *.sqlite3
 *.sqlite
+
+web_app.py.bak
+__pycache__/
