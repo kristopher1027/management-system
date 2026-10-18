@@ -1,171 +1,339 @@
 # ResourceHub
 
-ResourceHub is a campus equipment lending project. The command-line program
-uses Python's standard library and SQLite. A separate Flask website provides
-an inventory, borrow and return forms, and a dashboard.
+<p align="center">
+  <strong>One workspace for your company's resources, inventory, staff, and lending operations.</strong>
+</p>
 
-## Screenshots
+ResourceHub is a web-based resource and inventory management system designed to help organizations keep track of the equipment and items they own, the people who use them, and the movement of those items over time. Instead of relying on scattered spreadsheets, handwritten records, or disconnected tools, ResourceHub brings day-to-day inventory operations into one place.
 
-### Inventory
+Built with Python and SQLite, ResourceHub is being developed with a practical goal: make it easier for companies and teams to know what they have, who is responsible for it, what has been borrowed or returned, and how their operations are performing.
 
-![ResourceHub inventory page](docs/screenshots/inventory.png)
+> **Project status:** ResourceHub is actively being developed. This README separates functionality already present in the project from ideas on the roadmap. Planned capabilities are not presented as completed features.
 
-### Dashboard
+---
 
-![ResourceHub dashboard](docs/screenshots/dashboard.png)
+## Contents
 
-## Run the command-line program
+- [Why ResourceHub?](#why-resourcehub)
+- [What ResourceHub does today](#what-resourcehub-does-today)
+- [How it works](#how-it-works)
+- [Who it is for](#who-it-is-for)
+- [Technology](#technology)
+- [Getting started](#getting-started)
+- [Configuration and deployment](#configuration-and-deployment)
+- [Security and data protection](#security-and-data-protection)
+- [Testing](#testing)
+- [Roadmap: what ResourceHub can become](#roadmap-what-resourcehub-can-become)
+- [Contributing](#contributing)
 
-```sh
-python3 main.py
+## Why ResourceHub?
+
+Every organization depends on resources: laptops, tools, devices, equipment, supplies, and other assets that people need to do their jobs. When records are incomplete or spread across different places, teams can lose track of stock, miss returns, struggle to identify who has an item, and find it difficult to produce reliable reports.
+
+ResourceHub aims to solve that operational problem with a clear, centralized workflow.
+
+- **Know what you own.** Keep inventory records in one place.
+- **Know who is responsible.** Associate staff and resource activity with the people using the system.
+- **Track movement.** Record borrowing and returns rather than relying on memory.
+- **Understand activity.** Use reports to review stock, borrowing, and overdue items.
+- **Give each company its own space.** The web application supports separate shop/company accounts and their operational records.
+- **Make the workspace yours.** Owners can configure available shop identity and appearance settings.
+
+## What ResourceHub does today
+
+The following describes functionality present in the current project. Exact options may vary as development continues.
+
+### Inventory and resource tracking
+
+- Maintain resource records with identifiers, names, and quantities.
+- Track available stock and quantities currently in use.
+- Keep resource information in a SQLite database.
+- Support inventory operations through the web interface and the project's command-line program.
+
+### Borrowing and returns
+
+- Record resource loans and returns.
+- Associate lending activity with the staff member or borrower recorded by the system.
+- Apply borrowing limits in the existing lending workflow.
+- Calculate due dates and identify overdue items in reports.
+- Protect stock counts from rejected borrowing and invalid over-return operations.
+
+### Staff and company workspaces
+
+- Allow companies to register separate accounts in the multi-shop web application.
+- Provide an owner role for company-level management and a staff role for day-to-day operations.
+- Let owners manage staff for their company.
+- Keep registered companies' operational data separated into their own shop data stores.
+
+### Sales and operational records
+
+The web application includes workflows for recording sales alongside inventory, loans, and returns. These records support a more complete picture of how items are moving through a company's day-to-day operations.
+
+### Reports and backups
+
+- Review inventory and lending information, including overdue items.
+- Use reporting functionality to understand resource activity.
+- Export supported reports to CSV from the command-line application.
+- Create database snapshots and daily backups in the web application.
+- Download a ZIP backup from the owner's Reports area.
+
+Backups are a recovery aid, not a substitute for an independent copy. Keep private backups somewhere separate from the server.
+
+### Company settings and email
+
+- Configure supported company identity and appearance settings, including shop name, brand color, currency, and logo.
+- Use the server's private environment configuration for SMTP email delivery.
+- Send account-verification email as part of the registration workflow when email is configured.
+- Use the owner-only test-email action to check whether the configured email service can send a message.
+
+SMTP credentials belong on the server, never in browser code or committed files.
+
+## How it works
+
+A typical ResourceHub workflow looks like this:
+
+1. **Set up a company workspace.** A company registers and its owner manages the workspace.
+2. **Add resources.** Record the equipment or items the company needs to track.
+3. **Manage access.** The owner manages staff who will use the workspace.
+4. **Record activity.** Staff use the available workflows to record sales, loans, and returns.
+5. **Review the records.** Use reports to understand available stock, lending activity, and overdue resources.
+6. **Protect the data.** Maintain backups and configure persistent storage for deployments.
+
+The goal is to make resource accountability part of normal work—not a separate administrative burden.
+
+## Who it is for
+
+ResourceHub is intended for teams that need a straightforward way to manage physical resources and the people using them, including:
+
+- Small and medium-sized businesses
+- Offices and administrative teams
+- Schools, labs, and training centers
+- Equipment lending desks
+- Teams that share laptops, tools, devices, or other assets
+- Organizations that need company-specific inventory and staff workflows
+
+These are target use cases, not a claim that every industry-specific workflow is already implemented.
+
+## Technology
+
+| Area | Current technology |
+|---|---|
+| Application language | Python |
+| Web application | Python standard-library HTTP server in `web_app.py` |
+| Data storage | SQLite |
+| Command-line program | `main.py` |
+| Configuration | Environment variables and a private local `.env` file |
+| Testing | Python `unittest` |
+
+The repository also contains a separate Flask starter application (`app.py`). The Flask starter and the ResourceHub web application in `web_app.py` are different entry points; follow the instructions for the application you intend to run.
+
+## Getting started
+
+### Requirements
+
+- Python 3.10 or newer is recommended; use the Python version supported by your environment.
+- Git, if you are cloning the repository.
+- A writable local directory for the database and application data.
+
+### 1. Get the project
+
+```bash
+git clone https://github.com/kristopher1027/management-system.git
+cd management-system
 ```
 
-SQLite saves data in `campus_resources.db` in the directory where you start
-the program. A new database starts with sample resources and fellows. Loans are
-due in 14 days by default; reports include overdue items and the fellow holding
-them. Choose **Export report to CSV** to create `report.csv`.
+If you already have the project locally, move into its directory instead.
 
-## Run the Flask website locally
+### 2. Run the ResourceHub web application
 
-From the project folder, create and activate a virtual environment:
-
-```sh
-python3 -m venv .venv
-source .venv/bin/activate
+```bash
+python3 web_app.py
 ```
 
-On Windows PowerShell, activate it with:
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000) in your browser.
 
-```powershell
-.venv\Scripts\Activate.ps1
-```
+Run the server from the project directory for the default local setup. Stop it with `Ctrl+C`.
 
-Install the packages and start the website:
+### 3. Configure email for registration
 
-```sh
-python -m pip install -r requirements.txt
-python app.py
-```
+The application reads SMTP settings from a private `.env` file in the configured data directory. For the default local setup, that is the project directory.
 
-Open <http://127.0.0.1:5000>. Stop the server with **Ctrl+C**. The Flask
-website uses the same `campus_resources.db` as the command-line program, so
-run it from the project folder to use the project's database.
-
-## Digital vendor website
-
-Run the digital vendor website with:
-
-```sh
-python web_app.py
-```
-
-Open <http://127.0.0.1:8000>. Companies can register their own shop accounts.
-Each shop has its own SQLite inventory database, owner account, company contact
-information, reports, and staff. Owners manage staff for their shop; staff can
-record its sales, loans, and returns. Existing single-shop data remains in the
-original database as the `default` shop.
-
-By default, the website stores its SQLite database, `auth.json`, and `backups/`
-in the directory from which it starts. For hosting, point all persistent data
-at the host's mounted persistent volume:
-
-```sh
-export RESOURCEHUB_DATA_DIR="/path/to/persistent/volume"
-export RESOURCEHUB_HOST="0.0.0.0"
-export PORT="8000"
-python web_app.py
-```
-
-`RESOURCEHUB_DATA_DIR` holds the account registry, the original `default` shop
-database, separate databases and backups for registered shops, and shared
-backups together.
-The app snapshots the database before inventory changes and saves a daily
-snapshot; changes to accounts preserve the prior account file. Owners can also
-download a ZIP backup from Reports. Keep a copy outside the server because
-local snapshots are lost if the persistent volume is lost. The ZIP contains
-shop records and password hashes, so keep it private.
-
-Public company registration requires a sending email account and Cloudflare
-Turnstile keys. For Gmail, create a Google App Password for the account that
-will send verification codes. Copy [.env.example](/home/student/management-system/.env.example)
-to `.env` in `RESOURCEHUB_DATA_DIR`, then replace the sender address, app
-password, and Turnstile keys. The signup email is sent to the address entered
-by each user. Keep `.env` private; it is ignored by Git.
-
-The Gmail SMTP settings use `smtp.gmail.com` on port `587` by default, so only
-the sender account values are needed in `.env`:
-
-```sh
+```bash
 cp .env.example .env
 chmod 600 .env
 ```
 
-The signup flow verifies the company email and uses Turnstile. It collects a
-company phone number but does not send phone verification codes. Use a host
-with persistent disk mounted at `RESOURCEHUB_DATA_DIR`, and put the website
-behind HTTPS for public access. The app listens on `PORT` and can bind to the
-public interface with `RESOURCEHUB_HOST=0.0.0.0`. A free ephemeral filesystem
-is suitable only for a demo; its database and account data can be lost on
-restart or redeploy.
+Edit `.env` and replace the example values:
 
-The `RESOURCEHUB_SECRET_KEY` setting below applies only to the separate Flask
-starter (`app.py`), not the digital vendor website (`web_app.py`). The vendor
-website keeps sessions in memory and uses HttpOnly, same-site cookies. A server
-restart signs users out but does not erase inventory or account files. If
-serving through an HTTPS reverse proxy, set `RESOURCEHUB_COOKIE_SECURE=1` so
-browsers send the session cookie only over HTTPS.
-
-For a stable Flask session key, set `RESOURCEHUB_SECRET_KEY` before starting
-`app.py`. Generate a value with:
-
-```sh
-python -c "import secrets; print(secrets.token_hex(32))"
+```dotenv
+RESOURCEHUB_SMTP_HOST=smtp.gmail.com
+RESOURCEHUB_SMTP_PORT=587
+RESOURCEHUB_SMTP_FROM=your-sending-address@gmail.com
+RESOURCEHUB_SMTP_USERNAME=your-sending-address@gmail.com
+RESOURCEHUB_SMTP_PASSWORD=your-16-character-google-app-password
 ```
 
-Then set that value in your shell as `RESOURCEHUB_SECRET_KEY`. Keep it private
-and do not commit it. If it is not set, the app makes a temporary random key;
-forms can stop working after the server restarts.
+For Gmail, use a Google **App Password**, not your normal Google account password. Never paste real credentials into this README, source code, screenshots, issues, or commits. The `.env` file should remain ignored by Git; `.env.example` is the safe template.
 
-For example, on macOS or Linux:
+For public registration, configure your own Cloudflare Turnstile site and secret keys according to the application's environment configuration.
 
-```sh
-export RESOURCEHUB_SECRET_KEY="paste-your-generated-value-here"
+### 4. Run the command-line program (optional)
+
+The repository also includes a command-line inventory program:
+
+```bash
+python3 main.py
 ```
 
-In Windows PowerShell:
+It uses SQLite and supports its own inventory and reporting workflow. Keep in mind that `main.py`, the separate Flask starter, and `web_app.py` are distinct entry points with different behavior and setup.
 
-```powershell
-$env:RESOURCEHUB_SECRET_KEY = "paste-your-generated-value-here"
+## Configuration and deployment
+
+The web application supports configuration through environment variables. Common deployment settings include:
+
+- `RESOURCEHUB_DATA_DIR` — directory for persistent application data.
+- `RESOURCEHUB_HOST` — network interface to bind to; the default is local-only.
+- `PORT` — port for the web application.
+- `RESOURCEHUB_COOKIE_SECURE` — enable secure session cookies when serving over HTTPS.
+- `RESOURCEHUB_SMTP_HOST`, `RESOURCEHUB_SMTP_PORT`, `RESOURCEHUB_SMTP_FROM`, `RESOURCEHUB_SMTP_USERNAME`, and `RESOURCEHUB_SMTP_PASSWORD` — SMTP delivery settings.
+
+For a hosted deployment, point `RESOURCEHUB_DATA_DIR` at a **persistent disk or volume** and ensure the process can write to it. For example, on a Linux host:
+
+```bash
+export RESOURCEHUB_DATA_DIR="/path/to/persistent/volume"
+export RESOURCEHUB_HOST="0.0.0.0"
+export PORT="8000"
+python3 web_app.py
 ```
 
-## Flask starter deployment demo
+Use a real persistent path provided by your hosting platform; do not copy the example path literally. Put the application behind HTTPS before making it publicly accessible, and set `RESOURCEHUB_COOKIE_SECURE=1` when the HTTPS setup supports it. Restrict access to the data directory and backups.
 
-1. Push this project to a GitHub or GitLab repository.
-2. In Render, create a **New Web Service** and connect that repository.
-3. Choose the free instance type.
-4. Set **Build Command** to `pip install -r requirements.txt`.
-5. Set **Start Command** to `gunicorn app:app`. This deploys the Flask starter,
-   not the digital vendor website described above.
-6. Add an environment variable named `RESOURCEHUB_SECRET_KEY`. Generate a
-   private value with the command above and paste it into Render's environment
-   settings. Do not put the value in this README or source code.
-7. Create the service. When deployment finishes, open its `onrender.com` URL.
+A deployment with an ephemeral filesystem is suitable for a short-lived demo only: records may be lost when the service restarts or is redeployed. The ZIP backup can contain sensitive company records and password hashes, so store and share it carefully.
 
-This starter deployment is for demonstration. The free web service has an
-ephemeral filesystem, so SQLite records can be lost on restart or redeploy.
-Keeping real records requires a persistent database or a host that mounts
-persistent storage. For the digital vendor website, run `python web_app.py`
-with `RESOURCEHUB_DATA_DIR` pointed at that persistent volume as described
-above, and place it behind HTTPS.
+### Flask starter is separate
 
-The deployment commands follow Render's [official Flask deployment guide](https://render.com/docs/deploy-flask).
-See Render's [free instance details](https://render.com/docs/free) for current
-limits and storage behavior.
+The repository's `app.py` is a separate Flask starter. Its deployment and `RESOURCEHUB_SECRET_KEY` configuration do not automatically apply to `web_app.py`. If you choose to run the Flask starter, inspect its own requirements and configuration before deploying it. Do not assume deploying `app.py` deploys the ResourceHub multi-company web application.
 
-## Tests
+## Security and data protection
 
-Run the command-line unit tests with:
+ResourceHub includes security-focused controls such as role checks for owner-only operations, password hashing, session-cookie protections, request validation, and checks intended to prevent unauthorized cross-origin requests. Security must continue to be tested as the application evolves.
 
-```sh
-python3 -m unittest
+For safer operation:
+
+- Keep `.env`, live databases, account data, and backups out of version control.
+- Use unique, strong credentials and an App Password for Gmail SMTP.
+- Use HTTPS for public deployments.
+- Keep dependencies and the hosting environment updated.
+- Restrict access to persistent data and exported backups.
+- Test backup restoration, not just backup creation.
+- Review authentication, authorization, session handling, and tenant isolation before handling sensitive production data.
+
+No README or individual security feature is a guarantee that an application is completely secure. Production readiness requires ongoing testing, monitoring, and operational safeguards.
+
+## Testing
+
+Run the project's unit tests from the repository root:
+
+```bash
+python3 -m unittest discover -v
 ```
+
+Check Python syntax after making changes:
+
+```bash
+python3 -m py_compile main.py web_app.py
+```
+
+When contributing a change, run the relevant tests and review the diff before committing:
+
+```bash
+git diff --check
+git status --short
+git diff
+```
+
+## Roadmap: what ResourceHub can become
+
+The long-term vision is to grow ResourceHub from a useful inventory and lending application into a dependable resource-operations platform for organizations with multiple teams and locations. The following are **future possibilities**, not promises that these features already exist.
+
+### 1. Stronger asset lifecycle management
+
+- Unique asset tags and QR-code or barcode scanning
+- Serial numbers, photos, categories, conditions, and locations
+- Maintenance schedules, repair history, warranties, and replacement planning
+- Full audit history for changes to important asset records
+
+### 2. A complete approval and handover workflow
+
+- Configurable loan periods and approval policies
+- Authorized-officer approval before an item is issued
+- Digital handover and return confirmations
+- Condition checks, signatures, and clear responsibility records
+- Automated reminders for due dates and overdue returns
+
+### 3. Organization-wide operations
+
+- Multiple branches, departments, warehouses, and storage locations
+- Fine-grained roles and permissions
+- Invitations and controlled onboarding for staff
+- Central oversight with clear separation between company workspaces
+- Organization-level reporting across authorized locations
+
+### 4. Better insights and reporting
+
+- Visual dashboards for stock, usage, overdue loans, and asset utilization
+- Custom date ranges and downloadable reports
+- Low-stock and unusual-activity alerts
+- Trends that help organizations plan purchases and reduce unused inventory
+
+### 5. More integrations and notifications
+
+- Reliable email notifications for approvals, due dates, and account events
+- Optional integrations with identity providers and business systems
+- Import tools for existing spreadsheets and export tools for migration
+- APIs for approved integrations with other company software
+
+### 6. Production-grade reliability
+
+- Automated backup verification and guided restoration
+- Database migration and upgrade procedures
+- Structured application logs, monitoring, and health checks
+- Automated security, integration, and regression tests
+- Documented deployment, recovery, and incident-response procedures
+
+### 7. A more complete user experience
+
+- Responsive mobile-friendly workflows for staff in the field
+- Faster search, filtering, and bulk updates
+- Accessibility improvements and clearer error messages
+- Guided setup for new companies and administrators
+- Optional offline-friendly workflows, if the architecture and data consistency requirements support them
+
+### What “finished” should mean
+
+A mature ResourceHub should do more than store records. It should help an organization answer, accurately and quickly:
+
+- What assets do we have, and where are they?
+- Who is responsible for each asset right now?
+- What is available, borrowed, overdue, damaged, or awaiting approval?
+- Which assets need maintenance or replacement?
+- What changed, who changed it, and when?
+- Can we recover our records if a server or database fails?
+
+Reaching that level means validating the core workflows, tightening tenant and permission boundaries, proving that backups can be restored, testing realistic failure cases, and deploying with persistent storage and HTTPS. The roadmap should be delivered in tested, incremental releases.
+
+## Contributing
+
+Contributions, bug reports, and practical feature ideas are welcome. Before opening a pull request:
+
+1. Explain the problem and the intended behavior.
+2. Keep changes focused and avoid committing secrets or local data.
+3. Add or update tests for changed behavior.
+4. Run the test suite and `git diff --check`.
+5. Document configuration changes and any migration or deployment impact.
+
+## Project
+
+**Repository:** [kristopher1027/management-system](https://github.com/kristopher1027/management-system)
+
+ResourceHub is built around a simple principle: **every resource should be visible, every handover should be accountable, and every team should have a clearer picture of what it manages.**
