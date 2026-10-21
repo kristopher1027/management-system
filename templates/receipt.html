@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Receipt RH-{{ '%06d'|format(sale_id) }} · {{ shop.shop_name }}{% endblock %}
+{% block page_class %}receipt-page{% endblock %}
+
+{% block content %}
+  <section class="receipt-card" aria-labelledby="receipt-title">
+    <header class="receipt-heading">
+      <p class="eyebrow">{{ shop.shop_name }}</p>
+      <h1 id="receipt-title">Sales receipt</h1>
+      <p>Receipt RH-{{ '%06d'|format(sale_id) }}</p>
+    </header>
+    <dl class="receipt-details">
+      <div><dt>Date</dt><dd>{{ sale.created_at }}</dd></div>
+      <div><dt>Customer</dt><dd>{{ sale.customer or 'Walk-in customer' }}</dd></div>
+      <div><dt>Item</dt><dd>{{ sale.resource_name }}</dd></div>
+      <div><dt>Quantity</dt><dd>{{ sale.quantity }}</dd></div>
+      <div><dt>Unit price</dt><dd>NGN {{ '%.2f'|format(sale.unit_price) }}</dd></div>
+    </dl>
+    <dl class="receipt-totals">
+      <div><dt>Total</dt><dd>NGN {{ '%.2f'|format(total) }}</dd></div>
+      <div><dt>Received</dt><dd>NGN {{ '%.2f'|format(paid) }}</dd></div>
+      <div class="receipt-balance"><dt>Balance due</dt><dd>NGN {{ '%.2f'|format(due) }}</dd></div>
+    </dl>
+    <div class="receipt-actions">
+      <a class="button-primary" href="{{ whatsapp_url }}" target="_blank" rel="noopener noreferrer">Share with WhatsApp</a>
+      <button class="button-secondary" type="button" onclick="window.print()">Print receipt</button>
+      <a href="{{ url_for('transactions_page') }}">Back to sales history</a>
+    </div>
+  </section>
+{% endblock %}

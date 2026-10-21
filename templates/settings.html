@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Settings · ResourceHub{% endblock %}
+{% block page_class %}dashboard-page{% endblock %}
+
+{% block content %}
+  <section class="dashboard-page">
+    <div class="page-heading">
+      <p class="eyebrow">SHOP PREFERENCES</p>
+      <h1>Settings</h1>
+      <p>Set your shop name and main brand colour.</p>
+    </div>
+    {% if notice %}<div class="notice {{ 'success' if succeeded else 'error' }}" role="status">{{ notice }}</div>{% endif %}
+    <section class="dashboard-panel" aria-labelledby="shop-settings-title">
+      <div class="dashboard-panel-heading"><h2 id="shop-settings-title">Shop details</h2></div>
+      <form action="{{ url_for('settings_page') }}" method="post" class="transaction-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label for="shop-name">Shop name</label>
+        <input id="shop-name" name="shop_name" maxlength="60" value="{{ settings.shop_name }}" required>
+        <label for="shop-brand-color">Brand colour</label>
+        <input id="shop-brand-color" name="brand_color" type="color" value="{{ settings.brand_color }}" required>
+        <button class="button-primary" type="submit">Save settings</button>
+      </form>
+    </section>
+  </section>
+{% endblock %}

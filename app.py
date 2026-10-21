@@ -1,10 +1,13 @@
 """Flask pages for the ResourceHub equipment manager."""
 from collections import defaultdict
+import csv
 from datetime import date, timedelta
 import hmac
+from io import BytesIO, StringIO
 import os
 import secrets
-import tempfile
+import sqlite3
+from urllib.parse import quote
 
 from flask import Flask, abort, redirect, render_template, request, send_file, session, url_for
 
@@ -58,8 +61,8 @@ def authenticate(username, password):
 
 
 ADMIN_ENDPOINTS = {
-    "add_item_page", "reports_page", "reports_export", "reports_backup",
-    "audit_log_page", "audit_log_export",
+    "add_item_page", "update_item_cost_page", "reports_page", "reports_export", "reports_backup",
+    "audit_log_page", "audit_log_export", "settings_page",
 }
 
 
@@ -70,7 +73,13 @@ def provide_csrf_token():
             session["_csrf_token"] = secrets.token_urlsafe(32)
         return session["_csrf_token"]
 
-    return {"csrf_token": csrf_token}
+    shop_settings = {"shop_name": "ResourceHub", "brand_color": "#2b5f8f", "currency": "NGN", "logo_data": ""}
+    if os.path.isfile(inventory.DB_FILE):
+        try:
+            shop_settings = inventory.get_shop_settings()
+        except sqlite3.Error:
+            pass
+    return {"csrf_token": csrf_token, "shop_settings": shop_settings}
 
 
 @app.before_request
@@ -131,9 +140,11 @@ def inventory_page():
     search_text = request.args.get("q", "").strip()
     selected_category = request.args.get("category", "").strip()
 
-    # Reuse the CLI's search and category functions; this route only prepares
-    # the selected results for display.
-    matches = inventory.search_by_name(search_text) if search_text else inventory.resources
+    # Match the common lookup fields so a product can be found by name or code.
+    needle = search_text.casefold()
+    matches = [item for item in inventory.resources if not needle or any(
+        needle in str(item.get(field, "")).casefold() for field in ("name", "id", "sku")
+    )]
     if selected_category:
         category_ids = {item["id"] for item in inventory.filter_by_category(selected_category)}
         matches = [item for item in matches if item["id"] in category_ids]
@@ -143,7 +154,7 @@ def inventory_page():
         row = dict(resource)
         if row["available"] == 0:
             row.update(stock_class="out", stock_label="Out of stock")
-        elif row["available"] < 3:
+        elif row["available"] <= row["reorder_level"]:
             row.update(stock_class="low", stock_label="Low stock")
         else:
             row.update(stock_class="plenty", stock_label="In stock")
@@ -157,6 +168,7 @@ def inventory_page():
         search_text=search_text,
         selected_category=selected_category,
         notice=request.args.get("notice", ""),
+        notice_success=request.args.get("success") == "1" or request.args.get("notice", "").startswith("Added "),
     )
 
 
@@ -167,14 +179,26 @@ def add_item_page():
     try:
         total = int(form.get("total", ""))
         price = float(form.get("price", "0") or 0)
+        cost_price = float(form.get("cost_price", "0") or 0)
         reorder_level = int(form.get("reorder_level", "3") or 3)
     except ValueError:
-        return redirect(url_for("inventory_page", notice="Enter valid numbers for stock, price, and reorder level."))
+        return redirect(url_for("inventory_page", notice="Enter valid numbers for stock, cost price, selling price, and reorder level."))
     success, message = inventory.add_resource(
         form.get("resource_id", ""), form.get("name", ""), form.get("category", ""),
-        total, form.get("sku", ""), price, form.get("supplier", ""), reorder_level,
+        total, form.get("sku", ""), price, form.get("supplier", ""), reorder_level, cost_price,
     )
-    return redirect(url_for("inventory_page", notice=message))
+    return redirect(url_for("inventory_page", notice=message, success="1" if success else "0"))
+
+
+@app.route("/inventory/<resource_id>/cost-price", methods=["POST"])
+def update_item_cost_page(resource_id):
+    inventory.load_data()
+    try:
+        cost_price = float(request.form.get("cost_price", ""))
+    except ValueError:
+        return redirect(url_for("inventory_page", notice="Enter a valid cost price."))
+    success, message = inventory.update_resource_cost_price(resource_id, cost_price)
+    return redirect(url_for("inventory_page", notice=message, success="1" if success else "0"))
 
 
 def transaction_form(mode, message=None, succeeded=None, values=None):
@@ -252,19 +276,94 @@ def credit_sale_page():
     return redirect(url_for("dashboard_page", notice=message, success="1" if succeeded else "0"))
 
 
+def daily_closing_summary(db, day):
+    """Summarize sales, cash, costs, expenses, and current customer debt."""
+    sales = db.execute("""SELECT COALESCE(SUM(quantity*unit_price),0) AS total,
+        COUNT(*) AS sale_count,
+        COALESCE(SUM(CASE WHEN unit_cost IS NULL THEN 1 ELSE 0 END),0) AS sales_missing_cost,
+        COALESCE(SUM(CASE WHEN unit_cost IS NOT NULL THEN quantity*(unit_price-unit_cost) ELSE 0 END),0) AS gross_profit
+        FROM sales WHERE substr(created_at,1,10)=?""", (day,)).fetchone()
+    cash_received = db.execute("""SELECT
+        COALESCE((SELECT SUM(quantity*unit_price) FROM sales
+                  WHERE sale_type='cash' AND substr(created_at,1,10)=?),0)
+        + COALESCE((SELECT SUM(amount) FROM sale_payments WHERE substr(created_at,1,10)=?),0)""",
+        (day, day)).fetchone()[0]
+    debt = db.execute("""SELECT
+        COALESCE(SUM(CASE WHEN balance>0 THEN balance ELSE 0 END),0) AS amount_owed,
+        COUNT(DISTINCT CASE WHEN balance>0 THEN customer_id END) AS customer_count
+        FROM (
+            SELECT s.customer_id,s.quantity*s.unit_price-COALESCE(SUM(p.amount),0) AS balance
+            FROM sales s LEFT JOIN sale_payments p ON p.sale_id=s.id
+            WHERE s.sale_type='credit' GROUP BY s.id
+        )""").fetchone()
+    expenses = db.execute("""SELECT COALESCE(SUM(amount),0) AS total
+        FROM expenses WHERE substr(created_at,1,10)=?""", (day,)).fetchone()["total"]
+    return {
+        "day": day,
+        "sales_total": sales["total"],
+        "sales_count": sales["sale_count"],
+        "cash_received": cash_received,
+        "expenses_total": expenses,
+        "profit": sales["gross_profit"] - expenses if sales["sales_missing_cost"] == 0 else None,
+        "profit_needs_cost": sales["sales_missing_cost"] > 0,
+        "amount_owed": debt["amount_owed"],
+        "customer_count": debt["customer_count"],
+    }
+
+
 @app.route("/dashboard")
 def dashboard_page():
     inventory.load_data()
     summary = inventory.report_data()
+    summary["low_stock"] = [resource for resource in inventory.resources
+                            if resource["available"] == 0
+                            or resource["available"] <= resource["reorder_level"]]
     with inventory.connect() as db:
-        recent_sales = [dict(row) for row in db.execute("""SELECT s.created_at,s.quantity,s.unit_price,s.customer,
+        today = daily_closing_summary(db, date.today().isoformat())
+        recent_sales = [dict(row) for row in db.execute("""SELECT s.id AS sale_id,s.created_at,s.quantity,s.unit_price,s.customer,
             r.id AS resource_id,r.name AS resource_name FROM sales s JOIN resources r ON r.id=s.resource_id
             ORDER BY s.id DESC LIMIT 5""")]
     return render_template("dashboard.html", summary=summary, recent_sales=recent_sales,
+                           today_sales_total=today["sales_total"],
+                           today_sales_count=today["sales_count"],
+                           today_cash_received=today["cash_received"],
+                           customer_debt=today["amount_owed"],
+                           owing_customer_count=today["customer_count"],
+                           today_profit=today["profit"],
+                           profit_needs_cost=today["profit_needs_cost"],
                            fellows=[{"id": fid, "name": name} for fid, name in inventory.fellows.items()],
                            resources=inventory.resources,
                            notice=request.args.get("notice", ""),
                            succeeded=request.args.get("success") == "1")
+
+
+@app.route("/sales/<int:sale_id>/receipt")
+def receipt_page(sale_id):
+    """Show a printable and shareable receipt for a recorded sale."""
+    with inventory.connect() as db:
+        row = db.execute("""SELECT s.id,s.created_at,s.quantity,s.unit_price,s.customer,
+            s.sale_type,r.name AS resource_name FROM sales s JOIN resources r ON r.id=s.resource_id
+            WHERE s.id=?""", (sale_id,)).fetchone()
+        if not row:
+            abort(404)
+        sale = dict(row)
+        total = round(sale["quantity"] * sale["unit_price"], 2)
+        if sale["sale_type"] == "credit":
+            paid = db.execute("SELECT COALESCE(SUM(amount),0) FROM sale_payments WHERE sale_id=?",
+                              (sale_id,)).fetchone()[0]
+        else:
+            paid = total
+    due = round(max(0, total - paid), 2)
+    shop = inventory.get_shop_settings()
+    receipt_text = "\n".join([
+        shop["shop_name"], f"Receipt: RH-{sale_id:06d}", f"Date: {sale['created_at']}",
+        f"Customer: {sale['customer'] or 'Walk-in customer'}", sale["resource_name"],
+        f"{sale['quantity']} x NGN {sale['unit_price']:.2f}", f"Total: NGN {total:.2f}",
+        f"Received: NGN {paid:.2f}", f"Balance due: NGN {due:.2f}",
+    ])
+    return render_template("receipt.html", sale=sale, sale_id=sale_id, shop=shop,
+                           total=total, paid=paid, due=due,
+                           whatsapp_url="https://wa.me/?text=" + quote(receipt_text))
 
 
 @app.route("/transactions")
@@ -276,13 +375,13 @@ def transactions_page():
     if selected_type not in valid_types:
         selected_type = "all"
     with inventory.connect() as db:
-        rows = [dict(row) for row in db.execute("""SELECT created_at,type,resource_name,quantity,person FROM (
-            SELECT l.created_at,l.type,r.name AS resource_name,l.quantity,f.name AS person
+        rows = [dict(row) for row in db.execute("""SELECT created_at,type,resource_name,quantity,person,sale_id FROM (
+            SELECT l.created_at,l.type,r.name AS resource_name,l.quantity,f.name AS person,NULL AS sale_id
               FROM loans l JOIN resources r ON r.id=l.resource_id JOIN fellows f ON f.id=l.fellow_id
             UNION ALL
-            SELECT s.created_at,'sale',r.name,s.quantity,s.customer FROM sales s JOIN resources r ON r.id=s.resource_id
+            SELECT s.created_at,'sale',r.name,s.quantity,s.customer,s.id FROM sales s JOIN resources r ON r.id=s.resource_id
             UNION ALL
-            SELECT m.created_at,m.movement_type,r.name,m.quantity,'' FROM stock_movements m
+            SELECT m.created_at,m.movement_type,r.name,m.quantity,'',NULL FROM stock_movements m
               JOIN resources r ON r.id=m.resource_id
         ) ORDER BY created_at DESC""")]
     if selected_type != "all":
@@ -339,12 +438,25 @@ def customer_purchase_history():
 @app.route("/customers")
 def customers_page():
     inventory.load_data()
-    customers = [{"id": fid, "name": name} for fid, name in inventory.fellows.items()]
+    search_text = request.args.get("q", "").strip()[:100]
+    all_customers = [{"id": fid, "name": name} for fid, name in inventory.fellows.items()]
+    purchase_history = customer_purchase_history()
+    for customer in all_customers:
+        customer["amount_owed"] = round(sum(
+            purchase["amount_owed"] or 0
+            for purchase in purchase_history.get(customer["id"], [])
+        ), 2)
+    needle = search_text.casefold()
+    customers = [customer for customer in all_customers
+                 if not needle or needle in customer["name"].casefold() or needle in customer["id"].casefold()]
+    customer_groups = [group for group in current_customer_items()
+                       if not needle or needle in group[0][1].casefold() or needle in group[0][0].casefold()]
     return render_template(
         "customers.html",
-        customer_groups=current_customer_items(),
+        customer_groups=customer_groups,
         customers=customers,
-        purchase_history=customer_purchase_history(),
+        purchase_history=purchase_history,
+        search_text=search_text,
         notice=request.args.get("notice", ""),
         notice_success=request.args.get("added") == "1",
     )
@@ -371,9 +483,56 @@ def sale_payment_page(sale_id):
     ))
 
 
+@app.route("/expenses", methods=["GET", "POST"])
+def expenses_page():
+    inventory.load_data()
+    if request.method == "POST":
+        success, message = inventory.record_expense(
+            request.form.get("category", ""),
+            request.form.get("description", ""),
+            request.form.get("amount", ""),
+        )
+        return redirect(url_for("expenses_page", notice=message, success="1" if success else "0"))
+
+    today = date.today().isoformat()
+    with inventory.connect() as db:
+        expenses = [dict(row) for row in db.execute(
+            "SELECT category,description,amount,created_at FROM expenses ORDER BY id DESC LIMIT 100"
+        )]
+        today_total = db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE substr(created_at,1,10)=?", (today,)
+        ).fetchone()[0]
+    return render_template(
+        "expenses.html", expenses=expenses, today_total=today_total,
+        categories=["Rent", "Transport", "Utilities", "Wages", "Packaging", "Other"],
+        notice=request.args.get("notice", ""), succeeded=request.args.get("success") == "1",
+    )
+
+
 @app.route("/loans")
 def loans_page():
     return redirect(url_for("customers_page"))
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings_page():
+    inventory.load_data()
+    settings = inventory.get_shop_settings()
+    notice = ""
+    succeeded = False
+    if request.method == "POST":
+        success, notice = inventory.update_shop_settings(
+            request.form.get("shop_name", ""),
+            request.form.get("brand_color", ""),
+            settings["currency"],
+            settings["logo_data"],
+        )
+        if success:
+            return redirect(url_for("settings_page", notice=notice, success="1"))
+    else:
+        notice = request.args.get("notice", "")
+        succeeded = request.args.get("success") == "1"
+    return render_template("settings.html", settings=settings, notice=notice, succeeded=succeeded)
 
 
 @app.route("/reports")
@@ -381,34 +540,80 @@ def reports_page():
     inventory.load_data()
     summary = inventory.report_data()
     with inventory.connect() as db:
+        daily_close = daily_closing_summary(db, date.today().isoformat())
         sales = [dict(row) for row in db.execute("""SELECT r.id,r.name,r.category,r.price,
             COALESCE(SUM(s.quantity),0) AS units_sold,
-            COALESCE(SUM(s.quantity*s.unit_price),0) AS sales_total
+            COALESCE(SUM(s.quantity*s.unit_price),0) AS sales_total,
+            COALESCE(SUM(s.quantity*s.unit_cost),0) AS cost_total,
+            COALESCE(SUM(CASE WHEN s.id IS NOT NULL AND s.unit_cost IS NULL THEN 1 ELSE 0 END),0) AS missing_cost_count,
+            COALESCE(SUM(CASE WHEN s.unit_cost IS NOT NULL THEN s.quantity*(s.unit_price-s.unit_cost) ELSE 0 END),0) AS gross_profit
             FROM resources r LEFT JOIN sales s ON s.resource_id=r.id
             GROUP BY r.id ORDER BY sales_total DESC,r.name COLLATE NOCASE""")]
+        expenses_total = db.execute("SELECT COALESCE(SUM(amount),0) FROM expenses").fetchone()[0]
     available_by_id = {item["id"]: item["available"] for item in inventory.resources}
     for item in sales:
         item["available"] = available_by_id.get(item["id"], 0)
+        if item["missing_cost_count"]:
+            item["cost_total"] = None
+            item["gross_profit"] = None
     sales_total = sum(item["sales_total"] for item in sales)
+    missing_cost_count = sum(item["missing_cost_count"] for item in sales)
+    gross_profit_total = None if missing_cost_count else sum(item["gross_profit"] for item in sales)
+    net_profit = None if gross_profit_total is None else gross_profit_total - expenses_total
     stock_value = sum(item["available"] * item["price"] for item in inventory.resources)
     return render_template("reports.html", summary=summary, sales=sales,
-                           sales_total=sales_total, stock_value=stock_value)
+                           sales_total=sales_total, stock_value=stock_value,
+                           expenses_total=expenses_total, gross_profit_total=gross_profit_total,
+                           net_profit=net_profit, profit_needs_cost=bool(missing_cost_count),
+                           daily_close=daily_close)
 
 
 @app.route("/reports/export.csv")
 def reports_export():
     inventory.load_data()
-    with tempfile.NamedTemporaryFile(prefix="resourcehub-report-", suffix=".csv", delete=False) as temp:
-        path = temp.name
-    try:
-        inventory.export_report_csv(path)
-        response = send_file(path, as_attachment=True, download_name="resourcehub-report.csv", mimetype="text/csv")
-        response.call_on_close(lambda: os.path.exists(path) and os.remove(path))
-        return response
-    except Exception:
-        if os.path.exists(path):
-            os.remove(path)
-        raise
+    output = StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([
+        "section", "date", "item_id", "item_or_category", "category_or_note", "units_sold",
+        "sales_value_ngn", "cost_of_sold_items_ngn", "gross_profit_ngn", "expenses_ngn",
+        "net_profit_ngn", "available_units", "stock_value_ngn",
+    ])
+    with inventory.connect() as db:
+        sales = [dict(row) for row in db.execute("""SELECT r.id,r.name,r.category,r.price,
+            COALESCE(SUM(s.quantity),0) AS units_sold,
+            COALESCE(SUM(s.quantity*s.unit_price),0) AS sales_total,
+            COALESCE(SUM(s.quantity*s.unit_cost),0) AS cost_total,
+            COALESCE(SUM(CASE WHEN s.id IS NOT NULL AND s.unit_cost IS NULL THEN 1 ELSE 0 END),0) AS missing_cost_count,
+            COALESCE(SUM(CASE WHEN s.unit_cost IS NOT NULL THEN s.quantity*(s.unit_price-s.unit_cost) ELSE 0 END),0) AS gross_profit
+            FROM resources r LEFT JOIN sales s ON s.resource_id=r.id GROUP BY r.id
+            ORDER BY sales_total DESC,r.name COLLATE NOCASE""")]
+        expenses = [dict(row) for row in db.execute(
+            "SELECT category,description,amount,created_at FROM expenses ORDER BY created_at"
+        )]
+    available_by_id = {item["id"]: item["available"] for item in inventory.resources}
+    missing_cost_count = sum(item["missing_cost_count"] for item in sales)
+    sales_total = sum(item["sales_total"] for item in sales)
+    expenses_total = sum(item["amount"] for item in expenses)
+    cost_total = None if missing_cost_count else sum(item["cost_total"] for item in sales)
+    gross_profit = None if missing_cost_count else sum(item["gross_profit"] for item in sales)
+    net_profit = None if gross_profit is None else gross_profit - expenses_total
+    writer.writerow(["summary", "", "", "All shop activity", "", "", sales_total,
+                     "" if cost_total is None else cost_total,
+                     "" if gross_profit is None else gross_profit,
+                     expenses_total, "" if net_profit is None else net_profit, "", ""])
+    for item in sales:
+        available = available_by_id.get(item["id"], 0)
+        writer.writerow([
+            "item", "", item["id"], item["name"], item["category"], item["units_sold"],
+            item["sales_total"], "" if item["missing_cost_count"] else item["cost_total"],
+            "" if item["missing_cost_count"] else item["gross_profit"], "", "", available,
+            available * item["price"],
+        ])
+    for expense in expenses:
+        writer.writerow(["expense", expense["created_at"], "", expense["category"],
+                         expense["description"], "", "", "", "", expense["amount"], "", "", ""])
+    return send_file(BytesIO(output.getvalue().encode("utf-8-sig")), as_attachment=True,
+                     download_name="resourcehub-report.csv", mimetype="text/csv")
 
 
 @app.route("/reports/backup")
@@ -430,7 +635,6 @@ def audit_log_page():
 @app.route("/audit-log/export.csv")
 def audit_log_export():
     inventory.load_data()
-    from io import BytesIO
     output = BytesIO(audit.to_csv(inventory, request.args.get("q", "").strip()[:120]).encode("utf-8"))
     return send_file(output, as_attachment=True, download_name="resourcehub-audit.csv", mimetype="text/csv")
 

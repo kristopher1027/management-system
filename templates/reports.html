@@ -5,22 +5,43 @@
 
 {% block content %}
   <section class="dashboard-page">
-    <div class="page-heading"><p class="eyebrow">REPORTING</p><h1>Sales and stock reports</h1><p>Review sales totals and the value of available inventory.</p></div>
+    <div class="page-heading"><p class="eyebrow">REPORTING</p><h1>Sales and stock reports</h1><p>Review sales, costs, expenses, profit and the value of available inventory.</p></div>
     <div class="not-found-actions">
       <a class="button-primary" href="{{ url_for('reports_export') }}">Export CSV</a>
       <a class="button-secondary" href="{{ url_for('reports_backup') }}">Download backup</a>
     </div>
+    <section class="dashboard-panel" aria-labelledby="daily-closing-title">
+      <div class="dashboard-panel-heading">
+        <div><p class="eyebrow">END OF DAY</p><h2 id="daily-closing-title">Daily closing · {{ daily_close.day }}</h2></div>
+      </div>
+      <div class="dashboard-stats" aria-label="Daily closing figures">
+        <article class="dashboard-stat"><span>Sales today</span><strong>NGN {{ '%.2f'|format(daily_close.sales_total) }}</strong><small>{{ daily_close.sales_count }} sale{% if daily_close.sales_count != 1 %}s{% endif %} recorded</small></article>
+        <article class="dashboard-stat"><span>Cash received</span><strong>NGN {{ '%.2f'|format(daily_close.cash_received) }}</strong><small>Cash sales and customer payments</small></article>
+        <article class="dashboard-stat"><span>Expenses today</span><strong>NGN {{ '%.2f'|format(daily_close.expenses_total) }}</strong><small>Recorded shop expenses</small></article>
+        <article class="dashboard-stat"><span>Profit today</span><strong>{% if daily_close.profit is not none %}NGN {{ '%.2f'|format(daily_close.profit) }}{% else %}—{% endif %}</strong><small>{% if daily_close.profit_needs_cost %}Some sales have no saved cost yet{% else %}Sales profit minus expenses{% endif %}</small></article>
+        <article class="dashboard-stat"><span>Customers owe</span><strong>NGN {{ '%.2f'|format(daily_close.amount_owed) }}</strong><small>{{ daily_close.customer_count }} customer{% if daily_close.customer_count != 1 %}s{% endif %} with a balance now</small></article>
+      </div>
+    </section>
     <section class="dashboard-stats" aria-label="Report totals">
-      <article class="dashboard-stat"><span>Total sales</span><strong>{{ '%.2f'|format(sales_total) }}</strong><small>Recorded sales value</small></article>
+      <article class="dashboard-stat"><span>Total sales</span><strong>NGN {{ '%.2f'|format(sales_total) }}</strong><small>Recorded sales value</small></article>
+      <article class="dashboard-stat"><span>Cost of sold items</span><strong>{% if profit_needs_cost %}—{% else %}NGN {{ '%.2f'|format(sales|sum(attribute='cost_total')) }}{% endif %}</strong><small>Cost price captured at sale</small></article>
+      <article class="dashboard-stat"><span>Expenses</span><strong>NGN {{ '%.2f'|format(expenses_total) }}</strong><small>All recorded expenses</small></article>
+      <article class="dashboard-stat"><span>Gross profit</span><strong>{% if gross_profit_total is not none %}NGN {{ '%.2f'|format(gross_profit_total) }}{% else %}—{% endif %}</strong><small>Sales value minus item cost</small></article>
+      <article class="dashboard-stat"><span>Net profit</span><strong>{% if net_profit is not none %}NGN {{ '%.2f'|format(net_profit) }}{% else %}—{% endif %}</strong><small>Gross profit minus expenses{% if profit_needs_cost %}; some sales have no saved cost{% endif %}</small></article>
       <article class="dashboard-stat"><span>Available units</span><strong>{{ summary.available_units }}</strong><small>Current stock</small></article>
-      <article class="dashboard-stat"><span>Stock value</span><strong>{{ '%.2f'|format(stock_value) }}</strong><small>Available units × unit price</small></article>
-      <article class="dashboard-stat"><span>Units sold on credit</span><strong>{{ summary.borrowed_units }}</strong><small>Still owed by customers</small></article>
+      <article class="dashboard-stat"><span>Stock value</span><strong>NGN {{ '%.2f'|format(stock_value) }}</strong><small>Available units × selling price</small></article>
     </section>
     <section class="inventory-panel" aria-label="Sales and stock by item">
       <div class="table-scroll"><table class="inventory-table">
-        <thead><tr><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Units sold</th><th scope="col">Sales value</th><th scope="col">Available</th><th scope="col">Stock value</th></tr></thead>
-        <tbody>{% for item in sales %}<tr><td><strong>{{ item.name }}</strong><span class="resource-id">{{ item.id }}</span></td><td>{{ item.category }}</td><td>{{ item.units_sold }}</td><td>{{ '%.2f'|format(item.sales_total) }}</td><td>{{ item.available }}</td><td>{{ '%.2f'|format(item.available * item.price) }}</td></tr>
-          {% else %}<tr><td colspan="6" class="empty-results">No report data is available yet.</td></tr>{% endfor %}</tbody>
+        <thead><tr><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Units sold</th><th scope="col">Sales value (NGN)</th><th scope="col">Cost (NGN)</th><th scope="col">Gross profit (NGN)</th><th scope="col">Available</th><th scope="col">Stock value (NGN)</th></tr></thead>
+        <tbody>{% for item in sales %}<tr>
+          <td><strong>{{ item.name }}</strong><span class="resource-id">{{ item.id }}</span></td><td>{{ item.category }}</td><td>{{ item.units_sold }}</td>
+          <td>{{ '%.2f'|format(item.sales_total) }}</td>
+          <td>{% if item.cost_total is not none %}{{ '%.2f'|format(item.cost_total) }}{% else %}—{% endif %}</td>
+          <td>{% if item.gross_profit is not none %}{{ '%.2f'|format(item.gross_profit) }}{% else %}—{% endif %}</td>
+          <td>{{ item.available }}</td><td>{{ '%.2f'|format(item.available * item.price) }}</td>
+        </tr>
+          {% else %}<tr><td colspan="8" class="empty-results">No report data is available yet.</td></tr>{% endfor %}</tbody>
       </table></div>
     </section>
   </section>

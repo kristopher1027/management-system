@@ -6,10 +6,10 @@
   <title>{% block title %}ResourceHub{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body style="--blue: {{ shop_settings.brand_color }};">
   <a class="skip-link" href="#main-content">Skip to main content</a>
   <header class="site-header">
-    <a class="brand" href="{{ url_for('dashboard_page') }}">ResourceHub</a>
+    <a class="brand" href="{{ url_for('dashboard_page') }}">{{ shop_settings.shop_name }}</a>
     {% if session.get('username') %}
       <details class="site-menu">
         <summary class="menu-toggle" aria-label="Main navigation menu"><span aria-hidden="true">☰</span><span>Menu</span></summary>
@@ -18,6 +18,7 @@
           <a class="nav-link{% if request.endpoint in ['inventory_page', 'add_item_page'] %} active{% endif %}" href="{{ url_for('inventory_page') }}"{% if request.endpoint in ['inventory_page', 'add_item_page'] %} aria-current="page"{% endif %}>Inventory</a>
           <a class="nav-link{% if request.endpoint in ['transactions_page', 'borrow_route', 'return_route'] %} active{% endif %}" href="{{ url_for('transactions_page') }}"{% if request.endpoint in ['transactions_page', 'borrow_route', 'return_route'] %} aria-current="page"{% endif %}>Sales</a>
           <a class="nav-link{% if request.endpoint in ['customers_page', 'loans_page'] %} active{% endif %}" href="{{ url_for('customers_page') }}"{% if request.endpoint in ['customers_page', 'loans_page'] %} aria-current="page"{% endif %}>Customers</a>
+          <a class="nav-link{% if request.endpoint == 'expenses_page' %} active{% endif %}" href="{{ url_for('expenses_page') }}"{% if request.endpoint == 'expenses_page' %} aria-current="page"{% endif %}>Expenses</a>
           {% if session.get('role') == 'admin' %}
             <a class="nav-link{% if request.endpoint in ['reports_page', 'reports_export', 'reports_backup'] %} active{% endif %}" href="{{ url_for('reports_page') }}"{% if request.endpoint in ['reports_page', 'reports_export', 'reports_backup'] %} aria-current="page"{% endif %}>Reports</a>
             <a class="nav-link{% if request.endpoint in ['audit_log_page', 'audit_log_export'] %} active{% endif %}" href="{{ url_for('audit_log_page') }}"{% if request.endpoint in ['audit_log_page', 'audit_log_export'] %} aria-current="page"{% endif %}>Audit Log</a>
@@ -30,7 +31,10 @@
         </button>
         <div class="user-menu-panel" id="account-menu" popover="auto" aria-labelledby="account-menu-title">
           <strong id="account-menu-title">{{ session.get('username') }} · {{ session.get('role')|title }}</strong>
-          <ul><li>Settings</li><li>Change password</li></ul>
+          <ul>
+            {% if session.get('role') == 'admin' %}<li><a href="{{ url_for('settings_page') }}">Settings</a></li>{% endif %}
+            <li>Change password</li>
+          </ul>
           <form action="{{ url_for('logout_page') }}" method="post">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button class="account-signout" type="submit">Sign out</button>
@@ -47,7 +51,7 @@
   </main>
 
   <footer class="site-footer">
-    <p>ResourceHub · Shop sales and stock</p>
+    <p>{{ shop_settings.shop_name }} · Shop sales and stock</p>
   </footer>
 </body>
 </html>

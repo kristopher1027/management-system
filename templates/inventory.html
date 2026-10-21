@@ -13,7 +13,7 @@
     </div>
 
     <section class="inventory-panel" aria-label="Resource inventory">
-      {% if notice %}<div class="notice {{ 'success' if 'Added' in notice else 'error' }}" role="status">{{ notice }}</div>{% endif %}
+      {% if notice %}<div class="notice {{ 'success' if notice_success else 'error' }}" role="status">{{ notice }}</div>{% endif %}
       {% if session.get('role') == 'admin' %}
         <details class="add-item-section">
           <summary class="button-primary">＋ Add item</summary>
@@ -24,7 +24,8 @@
             <label for="new-resource-category">Category</label><input id="new-resource-category" name="category" required>
             <label for="new-resource-total">Starting quantity</label><input id="new-resource-total" name="total" type="number" min="1" step="1" required>
             <label for="new-resource-sku">SKU</label><input id="new-resource-sku" name="sku">
-            <label for="new-resource-price">Unit price</label><input id="new-resource-price" name="price" type="number" min="0" step="0.01" value="0">
+            <label for="new-resource-cost-price">Cost price (NGN)</label><input id="new-resource-cost-price" name="cost_price" type="number" min="0" step="0.01" value="0" required>
+            <label for="new-resource-price">Selling price (NGN)</label><input id="new-resource-price" name="price" type="number" min="0" step="0.01" value="0" required>
             <label for="new-resource-supplier">Supplier</label><input id="new-resource-supplier" name="supplier">
             <label for="new-resource-reorder">Restock threshold</label><input id="new-resource-reorder" name="reorder_level" type="number" min="0" step="1" value="3">
             <button class="button-primary" type="submit">Save item</button>
@@ -33,8 +34,8 @@
       {% endif %}
       <form class="inventory-filters" action="{{ url_for('inventory_page') }}" method="get">
         <label class="filter-search">
-          <span>Search by name</span>
-          <input type="search" name="q" value="{{ search_text }}" placeholder="For example, laptop">
+          <span>Search name, item ID or SKU</span>
+          <input type="search" name="q" value="{{ search_text }}" placeholder="For example, laptop or SKU-104">
         </label>
         <label class="filter-category">
           <span>Category</span>
@@ -54,19 +55,31 @@
       <div class="table-scroll">
         <table class="inventory-table">
           <thead>
-            <tr><th scope="col">Resource</th><th scope="col">Category</th><th scope="col">Total units</th><th scope="col">Available</th><th scope="col">Stock status</th></tr>
+            <tr><th scope="col">Resource</th><th scope="col">Category</th><th scope="col">Cost price</th><th scope="col">Selling price</th><th scope="col">Total units</th><th scope="col">Available</th><th scope="col">Stock status</th></tr>
           </thead>
           <tbody>
             {% for resource in resources %}
               <tr>
                 <td><strong>{{ resource.name }}</strong><span class="resource-id">{{ resource.id }}</span></td>
                 <td>{{ resource.category }}</td>
+                <td>
+                  NGN {{ '%.2f'|format(resource.cost_price) }}
+                  {% if session.get('role') == 'admin' %}
+                    <form action="{{ url_for('update_item_cost_page', resource_id=resource.id) }}" method="post" class="inline-payment-form">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <label class="visually-hidden" for="cost-{{ resource.id }}">New cost price for {{ resource.name }}</label>
+                      <input id="cost-{{ resource.id }}" name="cost_price" type="number" min="0" step="0.01" value="{{ '%.2f'|format(resource.cost_price) }}" required>
+                      <button class="button-secondary" type="submit">Save cost</button>
+                    </form>
+                  {% endif %}
+                </td>
+                <td>NGN {{ '%.2f'|format(resource.price) }}</td>
                 <td>{{ resource.total }}</td>
                 <td><strong>{{ resource.available }}</strong></td>
                 <td><span class="stock-badge {{ resource.stock_class }}">{{ resource.stock_label }}</span></td>
               </tr>
             {% else %}
-              <tr><td class="empty-results" colspan="5">
+              <tr><td class="empty-results" colspan="7">
                 <div class="empty-state">
                   <span class="empty-state-icon" aria-hidden="true">⌕</span>
                   <strong>No matching items</strong>

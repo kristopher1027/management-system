@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Expenses · ResourceHub{% endblock %}
+{% block page_class %}dashboard-page{% endblock %}
+
+{% block content %}
+  <section class="dashboard-page">
+    <div class="page-heading">
+      <p class="eyebrow">SHOP COSTS</p>
+      <h1>Expenses</h1>
+      <p>Record day-to-day costs for your shop.</p>
+    </div>
+
+    {% if notice %}<div class="notice {{ 'success' if succeeded else 'error' }}" role="status">{{ notice }}</div>{% endif %}
+
+    <section class="dashboard-stats" aria-label="Expense summary">
+      <article class="dashboard-stat"><span>Expenses today</span><strong>NGN {{ '%.2f'|format(today_total) }}</strong><small>Total recorded today</small></article>
+    </section>
+
+    <section class="dashboard-panel" id="expense-form" aria-labelledby="add-expense-title">
+      <div class="dashboard-panel-heading"><h2 id="add-expense-title">Add an expense</h2></div>
+      <form action="{{ url_for('expenses_page') }}" method="post" class="transaction-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label for="expense-category">Category</label>
+        <select id="expense-category" name="category" required>
+          <option value="">Choose a category</option>
+          {% for category in categories %}<option value="{{ category }}">{{ category }}</option>{% endfor %}
+        </select>
+        <label for="expense-amount">Amount (NGN)</label>
+        <input id="expense-amount" name="amount" type="number" min="0.01" step="0.01" placeholder="0.00" required>
+        <label for="expense-description">Note (optional)</label>
+        <input id="expense-description" name="description" maxlength="200" placeholder="For example, bus fare to the supplier">
+        <button class="button-primary" type="submit">Save expense</button>
+      </form>
+    </section>
+
+    <section class="inventory-panel" aria-labelledby="expense-history-title">
+      <div class="dashboard-panel-heading"><h2 id="expense-history-title">Recent expenses</h2></div>
+      <div class="table-scroll"><table class="inventory-table">
+        <thead><tr><th scope="col">Date</th><th scope="col">Category</th><th scope="col">Note</th><th scope="col">Amount (NGN)</th></tr></thead>
+        <tbody>
+          {% for expense in expenses %}
+            <tr><td>{{ expense.created_at }}</td><td>{{ expense.category }}</td><td>{{ expense.description or '—' }}</td><td>{{ '%.2f'|format(expense.amount) }}</td></tr>
+          {% else %}
+            <tr><td colspan="4" class="empty-results"><div class="empty-state compact-empty"><strong>No expenses recorded yet</strong><span>Record shop costs here so your profit report includes them.</span><a class="button-primary empty-state-action" href="#expense-form">Add an expense</a></div></td></tr>
+          {% endfor %}
+        </tbody>
+      </table></div>
+    </section>
+  </section>
+{% endblock %}

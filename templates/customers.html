@@ -11,7 +11,7 @@
       <p>Customer balances and purchase history.</p>
     </div>
     {% if notice %}<div class="notice {{ 'success' if notice_success else 'error' }}" role="status">{{ notice }}</div>{% endif %}
-    <section class="dashboard-panel" aria-labelledby="add-customer-title">
+    <section class="dashboard-panel" id="add-customer" aria-labelledby="add-customer-title">
       <div class="dashboard-panel-heading"><h2 id="add-customer-title">Add a customer</h2></div>
       <form action="{{ url_for('add_customer_page') }}" method="post" class="transaction-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -24,14 +24,26 @@
     </section>
     <section class="dashboard-panel" aria-labelledby="customer-list-title">
       <div class="dashboard-panel-heading"><h2 id="customer-list-title">Customer list</h2></div>
+      <form class="inventory-filters" action="{{ url_for('customers_page') }}" method="get">
+        <label class="filter-search"><span>Search customer name or ID</span><input type="search" name="q" value="{{ search_text }}" placeholder="For example, Amaka or C004"></label>
+        <button class="button-primary" type="submit">Search customers</button>
+        {% if search_text %}<a class="clear-filters" href="{{ url_for('customers_page') }}">Clear</a>{% endif %}
+      </form>
       {% if customers %}
         <ul class="dashboard-list">
           {% for customer in customers %}
-            <li><span><strong>{{ customer.name }}</strong><small>{{ customer.id }}</small></span></li>
+            <li><span><strong>{{ customer.name }}</strong><small>{{ customer.id }}</small></span><span class="customer-balance {{ 'settled' if customer.amount_owed == 0 else '' }}">{% if customer.amount_owed > 0 %}NGN {{ '%.2f'|format(customer.amount_owed) }} owed{% else %}No balance{% endif %}</span></li>
           {% endfor %}
         </ul>
+      {% elif search_text %}
+        <div class="empty-state compact-empty"><strong>No customer matches “{{ search_text }}”</strong><span>Try another name or customer ID.</span><a class="button-primary empty-state-action" href="{{ url_for('customers_page') }}">Show all customers</a></div>
       {% else %}
-        <p class="dashboard-empty">No customers have been added yet.</p>
+        <div class="empty-state compact-empty">
+          <span class="empty-state-icon" aria-hidden="true">＋</span>
+          <strong>No customers yet</strong>
+          <span>Add a customer to record credit sales and track purchase history.</span>
+          <a class="button-primary empty-state-action" href="#add-customer">Add a customer</a>
+        </div>
       {% endif %}
     </section>
     <section class="dashboard-panel" aria-labelledby="purchase-history-title">

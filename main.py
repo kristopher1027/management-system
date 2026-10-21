@@ -71,7 +71,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS resources (
               id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
               total INTEGER NOT NULL CHECK(total > 0), sku TEXT NOT NULL DEFAULT '',
-              price REAL NOT NULL DEFAULT 0, supplier TEXT NOT NULL DEFAULT '',
+              price REAL NOT NULL DEFAULT 0, cost_price REAL NOT NULL DEFAULT 0 CHECK(cost_price >= 0),
+              supplier TEXT NOT NULL DEFAULT '',
               reorder_level INTEGER NOT NULL DEFAULT 3 CHECK(reorder_level >= 0));
             CREATE TABLE IF NOT EXISTS fellows (
               id TEXT PRIMARY KEY, name TEXT NOT NULL);
@@ -88,6 +89,7 @@ def init_db():
               resource_id TEXT NOT NULL REFERENCES resources(id),
               quantity INTEGER NOT NULL CHECK(quantity > 0),
               unit_price REAL NOT NULL DEFAULT 0 CHECK(unit_price >= 0),
+              unit_cost REAL CHECK(unit_cost >= 0),
               customer TEXT NOT NULL DEFAULT '',
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
             CREATE INDEX IF NOT EXISTS sale_resource ON sales(resource_id);
@@ -98,6 +100,13 @@ def init_db():
               movement_type TEXT NOT NULL DEFAULT 'restock',
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
             CREATE INDEX IF NOT EXISTS stock_movement_resource ON stock_movements(resource_id);
+            CREATE TABLE IF NOT EXISTS expenses (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              category TEXT NOT NULL,
+              description TEXT NOT NULL DEFAULT '',
+              amount REAL NOT NULL CHECK(amount > 0),
+              created_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS expense_created_at ON expenses(created_at);
             CREATE TABLE IF NOT EXISTS shop_settings (
               id INTEGER PRIMARY KEY CHECK(id=1),
               shop_name TEXT NOT NULL DEFAULT 'ResourceHub',
@@ -110,6 +119,7 @@ def init_db():
         for column, declaration in (
             ("sku", "TEXT NOT NULL DEFAULT ''"),
             ("price", "REAL NOT NULL DEFAULT 0"),
+            ("cost_price", "REAL NOT NULL DEFAULT 0 CHECK(cost_price >= 0)"),
             ("supplier", "TEXT NOT NULL DEFAULT ''"),
             ("reorder_level", "INTEGER NOT NULL DEFAULT 3"),
         ):
@@ -122,6 +132,9 @@ def init_db():
         if "unit_price" not in sale_columns:
             db.execute("ALTER TABLE sales ADD COLUMN unit_price REAL NOT NULL DEFAULT 0")
             sale_columns.add("unit_price")
+        if "unit_cost" not in sale_columns:
+            db.execute("ALTER TABLE sales ADD COLUMN unit_cost REAL CHECK(unit_cost >= 0)")
+            sale_columns.add("unit_cost")
         if "customer_id" not in sale_columns:
             db.execute("ALTER TABLE sales ADD COLUMN customer_id TEXT REFERENCES fellows(id)")
             db.execute("""UPDATE sales SET customer_id=(
@@ -314,7 +327,7 @@ def _outstanding(db, fellow_id, resource_id):
     return row[0]
 
 
-def add_resource(resource_id, name, category, total, sku="", price=0, supplier="", reorder_level=3):
+def add_resource(resource_id, name, category, total, sku="", price=0, supplier="", reorder_level=3, cost_price=0):
     rid, name, category = resource_id.strip().upper(), name.strip(), category.strip()
     if not rid or not name or not category:
         return False, "ID, name and category cannot be empty."
@@ -323,20 +336,39 @@ def add_resource(resource_id, name, category, total, sku="", price=0, supplier="
     if not isinstance(sku, str) or not isinstance(supplier, str):
         return False, "SKU and supplier must be text."
     if type(price) not in (int, float) or not math.isfinite(price) or price < 0:
-        return False, "Price must be a non-negative number."
+        return False, "Selling price must be a non-negative number."
+    if type(cost_price) not in (int, float) or not math.isfinite(cost_price) or cost_price < 0:
+        return False, "Cost price must be a non-negative number."
     if type(reorder_level) is not int or reorder_level < 0:
         return False, "Restock threshold must be a non-negative whole number."
     backup_database()
     try:
         with connect() as db:
-            db.execute("""INSERT INTO resources(id,name,category,total,sku,price,supplier,reorder_level)
-                VALUES(?,?,?,?,?,?,?,?)""", (rid, name, category, total, sku.strip(), float(price), supplier.strip(), reorder_level))
+            db.execute("""INSERT INTO resources(id,name,category,total,sku,price,cost_price,supplier,reorder_level)
+                VALUES(?,?,?,?,?,?,?,?,?)""",
+                (rid, name, category, total, sku.strip(), float(price), float(cost_price), supplier.strip(), reorder_level))
             db.execute("""INSERT INTO stock_movements(resource_id,quantity,movement_type,created_at)
                 VALUES(?,?,'opening_stock',?)""", (rid, total, current_timestamp()))
     except sqlite3.IntegrityError:
         return False, f"Resource ID {rid} already exists."
     refresh_state()
     return True, f"Added {name} ({rid}) with {total} unit(s)."
+
+
+def update_resource_cost_price(resource_id, cost_price):
+    """Update the purchase cost used for profit calculations."""
+    rid = str(resource_id).strip().upper()
+    if type(cost_price) not in (int, float) or not math.isfinite(cost_price) or cost_price < 0:
+        return False, "Cost price must be a non-negative number."
+    with connect() as db:
+        if not db.execute("SELECT 1 FROM resources WHERE id=?", (rid,)).fetchone():
+            return False, f"Unknown item ID: {rid}"
+    backup_database()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("UPDATE resources SET cost_price=? WHERE id=?", (float(cost_price), rid))
+    refresh_state()
+    return True, f"Updated cost price for {rid}."
 
 
 def update_resource_details(resource_id, sku, price, supplier, reorder_level):
@@ -406,7 +438,7 @@ def record_sale(resource_id, quantity, customer=""):
     backup_database()
     with connect() as db:
         db.execute("BEGIN IMMEDIATE")
-        resource = db.execute("SELECT name,total,price FROM resources WHERE id=?", (rid,)).fetchone()
+        resource = db.execute("SELECT name,total,price,cost_price FROM resources WHERE id=?", (rid,)).fetchone()
         if not resource:
             return False, f"Unknown resource ID: {rid}"
         loan_balance = db.execute("""SELECT COALESCE(SUM(CASE
@@ -416,8 +448,10 @@ def record_sale(resource_id, quantity, customer=""):
         available = resource["total"] - loan_balance - sold
         if quantity > available:
             return False, f"Only {available} unit(s) of {resource['name']} remain in stock; you asked for {quantity}."
-        db.execute("INSERT INTO sales(resource_id,quantity,unit_price,customer,created_at) VALUES(?,?,?,?,?)",
-                   (rid, quantity, resource["price"], customer, current_timestamp()))
+        unit_cost = resource["cost_price"] if resource["cost_price"] > 0 else None
+        db.execute("""INSERT INTO sales(resource_id,quantity,unit_price,unit_cost,customer,created_at)
+                   VALUES(?,?,?,?,?,?)""",
+                   (rid, quantity, resource["price"], unit_cost, customer, current_timestamp()))
     refresh_state()
     who = f" for {customer}" if customer else ""
     return True, f"Recorded sale of {quantity} x {resource['name']}{who}."
@@ -442,7 +476,7 @@ def record_credit_sale(customer_id, resource_id, quantity, amount_paid):
         customer = db.execute("SELECT name FROM fellows WHERE id=?", (fid,)).fetchone()
         if not customer:
             return False, "Choose an existing customer."
-        resource = db.execute("SELECT name,total,price FROM resources WHERE id=?", (rid,)).fetchone()
+        resource = db.execute("SELECT name,total,price,cost_price FROM resources WHERE id=?", (rid,)).fetchone()
         if not resource:
             return False, f"Unknown item ID: {rid}"
         loan_balance = db.execute("""SELECT COALESCE(SUM(CASE
@@ -457,10 +491,11 @@ def record_credit_sale(customer_id, resource_id, quantity, amount_paid):
         if paid > total:
             return False, f"Amount received cannot exceed the sale total of NGN {total:.2f}."
         now = current_timestamp()
+        unit_cost = resource["cost_price"] if resource["cost_price"] > 0 else None
         cursor = db.execute("""INSERT INTO sales
-          (resource_id,quantity,unit_price,customer,customer_id,sale_type,created_at)
-          VALUES(?,?,?,?,?,'credit',?)""",
-          (rid, quantity, resource["price"], customer["name"], fid, now))
+          (resource_id,quantity,unit_price,unit_cost,customer,customer_id,sale_type,created_at)
+          VALUES(?,?,?,?,?,?,'credit',?)""",
+          (rid, quantity, resource["price"], unit_cost, customer["name"], fid, now))
         if paid > 0:
             db.execute("INSERT INTO sale_payments(sale_id,amount,created_at) VALUES(?,?,?)",
                        (cursor.lastrowid, float(paid), now))
@@ -500,6 +535,30 @@ def record_sale_payment(sale_id, amount):
     refresh_state()
     remaining = due - payment
     return True, f"Payment recorded. NGN {remaining:.2f} remains owed."
+
+
+def record_expense(category, description, amount):
+    """Save one positive shop expense with a short category and description."""
+    category = str(category).strip()
+    description = str(description).strip()
+    if not category or len(category) > 60:
+        return False, "Choose an expense category."
+    if len(description) > 200:
+        return False, "Expense note must be 200 characters or fewer."
+    try:
+        value = Decimal(str(amount))
+        if not value.is_finite() or value <= 0 or value != value.quantize(Decimal("0.01")):
+            raise InvalidOperation
+    except (InvalidOperation, ValueError):
+        return False, "Enter an expense amount greater than zero with up to 2 decimal places."
+
+    backup_database()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("INSERT INTO expenses(category,description,amount,created_at) VALUES(?,?,?,?)",
+                   (category, description, float(value), current_timestamp()))
+    refresh_state()
+    return True, f"Recorded expense of NGN {value:.2f}."
 
 
 def add_fellow(fellow_id, name):
@@ -683,7 +742,8 @@ def report_data():
     highest = max(on_loan.values(), default=0)
     return {"total_units": total, "available_units": available, "borrowed_units": sum(on_loan.values()),
             "damaged_units": damaged,
-            "low_stock": [r for r in resources if r["available"] < 3],
+            "low_stock": [r for r in resources
+                          if r["available"] == 0 or r["available"] <= r["reorder_level"]],
             "most_borrowed": [dict(r, borrowed=on_loan[r["id"]])
                               for r in resources if highest and on_loan[r["id"]] == highest]}
 
@@ -710,7 +770,7 @@ def report(as_of=None):
     print(f"Available units: {data['available_units']}")
     print(f"Borrowed units: {data['borrowed_units']}")
     print(f"Damaged or lost units: {data['damaged_units']}")
-    print("Low stock (fewer than 3 available):")
+    print("Low stock (at or below each item's restock threshold):")
     for r in data["low_stock"] or [None]:
         print(f"  {r['name']} ({r['available']})" if r else "  None")
     print("Most borrowed:")
