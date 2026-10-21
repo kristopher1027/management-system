@@ -14,6 +14,7 @@ import secrets
 import shutil
 import sqlite3
 import smtplib
+import ssl
 from email.message import EmailMessage
 import tempfile
 import urllib.parse
@@ -63,6 +64,7 @@ TENANT_DIR = os.path.join(inventory.DATA_DIR, "shops")
 ROOT_BACKUP_DIR = inventory.BACKUP_DIR
 email_challenges = {}
 email_ip_sends = {}
+INITIALIZED_SHOPS = set()
 
 # In-memory login rate limiting: five failures, then a 15-minute cooldown.
 LOGIN_ATTEMPTS = {}
@@ -156,7 +158,13 @@ def activate_shop(shop_id, allow_create=False):
         inventory.DB_FILE = db_file
         inventory.BACKUP_DIR = backup_dir
         if os.path.isfile(db_file):
-            inventory.refresh_state()
+            if shop_id not in INITIALIZED_SHOPS:
+                # Apply schema updates to older shop databases once per server
+                # run, without adding demo rows to an intentionally empty shop.
+                inventory.init_db(seed_defaults=False)
+                INITIALIZED_SHOPS.add(shop_id)
+            else:
+                inventory.refresh_state()
     except Exception:
         inventory.resources.clear()
         inventory.fellows.clear()
@@ -170,6 +178,7 @@ def create_shop_database(shop_id, shop_name, phone, email):
     try:
         activate_shop(shop_id, allow_create=True)
         inventory.init_db()
+        INITIALIZED_SHOPS.add(shop_id)
         with inventory.connect() as db:
             db.execute("DELETE FROM loans")
             db.execute("DELETE FROM sales")
@@ -185,15 +194,18 @@ def create_shop_database(shop_id, shop_name, phone, email):
 
 def smtp_settings():
     """Read and validate the SMTP settings from the environment."""
-    host = os.environ.get("RESOURCEHUB_SMTP_HOST", "smtp.gmail.com")
+    host = os.environ.get("RESOURCEHUB_SMTP_HOST", "smtp.gmail.com").strip()
     sender = os.environ.get("RESOURCEHUB_SMTP_FROM", "")
     password = os.environ.get("RESOURCEHUB_SMTP_PASSWORD", "").replace(" ", "")
     username = os.environ.get("RESOURCEHUB_SMTP_USERNAME", sender)
     port = int(os.environ.get("RESOURCEHUB_SMTP_PORT", "587"))
-    if (not sender or not password or sender.lower() == "your-sender@gmail.com"
-            or password.lower() == "your-google-app-password"):
-        raise RuntimeError("Replace the example sender and password in .env with your sending Gmail address and its Google App Password.")
-    if len(password) != 16:
+    placeholders = {"your-google-app-password", "your-app-password", "replace-me", "changeme"}
+    if (not host or not sender or not username or not password
+            or sender.lower().endswith("@example.com")
+            or sender.lower() == "your-sender@gmail.com"
+            or password.lower() in placeholders):
+        raise RuntimeError("Configure RESOURCEHUB_SMTP_HOST, RESOURCEHUB_SMTP_FROM, RESOURCEHUB_SMTP_USERNAME, and RESOURCEHUB_SMTP_PASSWORD in .env before using email features.")
+    if host.lower() == "smtp.gmail.com" and len(password) != 16:
         raise RuntimeError("The Gmail app password should be 16 characters. Use a Google App Password, not your regular Gmail password.")
     return host, port, sender, username, password
 
@@ -206,10 +218,18 @@ def deliver_email(to_address, subject, body):
     message["To"] = to_address
     message["Subject"] = subject
     message.set_content(body)
-    with smtplib.SMTP(host, port, timeout=15) as smtp:
-        smtp.starttls()
-        smtp.login(username, password)
-        smtp.send_message(message)
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=15,
+                              context=ssl.create_default_context()) as smtp:
+            smtp.login(username, password)
+            smtp.send_message(message)
+    else:
+        with smtplib.SMTP(host, port, timeout=15) as smtp:
+            smtp.ehlo()
+            smtp.starttls(context=ssl.create_default_context())
+            smtp.ehlo()
+            smtp.login(username, password)
+            smtp.send_message(message)
 
 
 def send_email_code(email):
@@ -368,17 +388,27 @@ h1,h2,h3{letter-spacing:-.015em}
 
 /* Header */
 .shell{min-height:100vh}
-.topbar{position:sticky;top:0;z-index:5;min-height:64px;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:0 max(24px,calc((100vw - 1320px)/2));background:var(--paper);border-bottom:1px solid var(--line);color:var(--ink)}
-.app-menu{flex:1;display:flex;justify-content:center}.app-menu summary{display:none}.app-menu nav{display:flex;align-items:center;justify-content:center;gap:4px}.app-menu a{padding:9px 10px;border-radius:8px;color:var(--muted);font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap}.app-menu a:hover,.app-menu a:focus-visible{background:var(--wash);color:var(--ink)}.app-menu a:focus-visible,.app-menu summary:focus-visible{outline:3px solid var(--blue);outline-offset:2px}html{scroll-behavior:smooth}main [id]{scroll-margin-top:82px}
-.brand{display:flex;align-items:center;gap:12px;font-weight:650;font-size:15px}
-.brand small{display:block;color:var(--muted);font-size:12px;font-weight:450}
-.brand-mark{height:36px;width:36px;border-radius:9px;background:var(--blue);color:var(--on-blue);display:grid;place-items:center;overflow:hidden;flex:0 0 auto}
+.topbar{position:sticky;top:0;z-index:5;min-height:76px;display:grid;grid-template-columns:minmax(190px,auto) minmax(0,1fr) auto;align-items:center;gap:16px;padding:10px max(28px,calc((100vw - 1320px)/2));background:var(--paper);border-bottom:1px solid var(--line);box-shadow:0 5px 20px #16212b0b;color:var(--ink)}
+.app-menu{min-width:0;display:flex;justify-content:center}.app-menu summary{display:none}.app-menu nav{display:flex;align-items:center;justify-content:center;gap:5px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--wash)}.app-menu a{padding:8px 11px;border-radius:8px;color:var(--muted);font-size:13px;font-weight:650;text-decoration:none;white-space:nowrap;transition:background .16s ease,color .16s ease,box-shadow .16s ease}.app-menu a:hover,.app-menu a:focus-visible{background:var(--paper);color:var(--ink);box-shadow:0 1px 4px #16212b14}.app-menu a:focus-visible,.app-menu summary:focus-visible{outline:3px solid var(--blue);outline-offset:2px}html{scroll-behavior:smooth}main [id]{scroll-margin-top:92px}
+.app-menu a[aria-current="page"]{background:var(--paper);color:var(--accent-ink);box-shadow:0 1px 4px #16212b14}
+.brand{display:flex;align-items:center;gap:12px;font-weight:750;font-size:16px;letter-spacing:-.02em}
+.brand small{display:block;margin-top:1px;color:var(--muted);font-size:11px;font-weight:500;letter-spacing:.01em}
+.brand-mark{height:42px;width:42px;border-radius:12px;background:linear-gradient(145deg,var(--blue),color-mix(in srgb,var(--blue) 78%,#000));color:var(--on-blue);display:grid;place-items:center;overflow:hidden;flex:0 0 auto;box-shadow:0 4px 10px color-mix(in srgb,var(--blue) 24%,transparent)}
 .brand-mark svg{width:20px;height:20px}.brand-mark .shop-logo{width:100%;height:100%;object-fit:contain;padding:3px}
-.top-right{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px}
-.live{height:8px;width:8px;border-radius:50%;background:#2fb386}
-.account-name{color:var(--ink);font-size:13px;font-weight:550;padding:0 4px}
-.logout{border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:var(--r-ctl);padding:7px 11px;font-size:13px;font-weight:550}
-.logout:hover{background:var(--wash)}
+.top-right{display:flex;align-items:center;justify-content:flex-end;gap:14px;color:var(--muted);font-size:12px}
+.system-status{display:inline-flex;align-items:center;gap:9px;padding:8px 11px;border:1px solid var(--green-bg);border-radius:999px;background:color-mix(in srgb,var(--green-bg) 58%,#fff);color:var(--green);font-size:12px;font-weight:650;white-space:nowrap}
+.live{height:8px;width:8px;border-radius:50%;background:#2fb386;box-shadow:0 0 0 3px color-mix(in srgb,#2fb386 15%,#fff)}
+.account-menu{position:relative;flex:0 0 auto}
+.account-name{display:flex;align-items:center;gap:10px;min-height:42px;padding:8px 13px;border:1px solid var(--line);border-radius:12px;background:var(--paper);color:var(--ink);font-size:12px;font-weight:700;white-space:nowrap;cursor:pointer;list-style:none;transition:background .16s ease,border-color .16s ease,box-shadow .16s ease}
+.account-name::-webkit-details-marker{display:none}.account-name::after{content:"";width:7px;height:7px;border-right:1.7px solid currentColor;border-bottom:1.7px solid currentColor;transform:translateY(-2px) rotate(45deg);transition:transform .16s ease}.account-menu[open] .account-name::after{transform:translateY(2px) rotate(225deg)}
+.account-name:hover,.account-menu[open] .account-name{border-color:color-mix(in srgb,var(--line) 60%,var(--blue));background:var(--wash)}
+.account-name:focus-visible{outline:3px solid var(--blue);outline-offset:3px}
+.account-menu-panel{position:absolute;top:calc(100% + 10px);right:0;z-index:10;width:min(250px,calc(100vw - 28px));display:grid;gap:5px;padding:9px;border:1px solid var(--line);border-radius:14px;background:var(--paper);box-shadow:0 16px 40px #16212b24}
+.account-menu-panel::before{content:"Account";padding:8px 10px 7px;color:var(--muted);font-size:11px;font-weight:750;letter-spacing:.1em;text-transform:uppercase}
+.logout{width:100%;min-height:42px;display:flex;align-items:center;border:0;border-radius:9px;background:transparent;color:var(--ink);padding:9px 11px;font-size:13px;font-weight:600;text-align:left;transition:background .16s ease,color .16s ease}
+.logout:hover{background:var(--wash);color:var(--blue)}
+.account-menu-panel #logoutButton{margin-top:4px;border-top:1px solid var(--line);border-radius:0 0 9px 9px;color:var(--red)}
+.account-menu-panel #logoutButton:hover{background:var(--red-bg);color:var(--red)}
 
 /* Page structure */
 main{max-width:1320px;margin:auto;padding:32px 24px 56px}
@@ -492,8 +522,9 @@ dialog::backdrop{background:#16212b73}
 @media(max-width:940px){.layout{grid-template-columns:1fr}.side{grid-template-columns:repeat(2,minmax(0,1fr))}.stats{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:850px){.landing-content{grid-template-columns:1fr;gap:36px;padding-top:36px}.inventory-preview{max-width:620px}}
 @media(max-width:700px){.landing-features{grid-template-columns:1fr;padding:0 20px 48px}.landing-feature{padding:22px 0 0}}
-@media(max-width:900px){.topbar{padding-right:16px;padding-left:16px}.app-menu{flex:0 0 auto;position:relative}.app-menu summary{display:block;padding:9px 12px;border:1px solid var(--line);border-radius:9px;color:var(--ink);font-size:13px;font-weight:650;cursor:pointer;list-style:none}.app-menu summary::-webkit-details-marker{display:none}.app-menu nav{position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);display:none;min-width:220px;align-items:stretch;flex-direction:column;gap:3px;padding:8px;border:1px solid var(--line);border-radius:11px;background:var(--paper);box-shadow:0 12px 30px #16212b24}.app-menu[open] nav{display:flex}.app-menu a{padding:10px 12px}}
-@media(max-width:600px){.topbar{height:60px;padding:0 16px}.top-right .status-text{display:none}main{padding:22px 14px 40px}.heading{align-items:flex-start;flex-direction:column}.heading h1{font-size:23px}.today{display:none}.stat{padding:14px}.stat-value{font-size:24px}.layout,.side{gap:14px}.panel{padding:16px}.panel-head{align-items:flex-start;flex-direction:column}.actions{width:100%}.search,.category-filter{width:100%}.side{grid-template-columns:1fr}th,td{padding-left:8px;padding-right:8px}.auth-card{padding:24px}}
+@media(max-width:1100px){.topbar{grid-template-columns:minmax(0,1fr) auto auto;gap:12px;padding:12px 20px}.app-menu{grid-column:2;position:relative;justify-self:end}.app-menu summary{display:block;padding:9px 13px;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink);font-size:13px;font-weight:700;cursor:pointer;list-style:none}.app-menu summary:hover{background:var(--wash)}.app-menu summary::-webkit-details-marker{display:none}.app-menu nav{position:absolute;top:calc(100% + 9px);left:0;right:auto;transform:none;display:none;min-width:230px;align-items:stretch;flex-direction:column;gap:3px;padding:8px;border:1px solid var(--line);border-radius:13px;background:var(--paper);box-shadow:0 14px 34px #16212b1f}.app-menu[open] nav{display:flex}.app-menu a{padding:11px 12px}.top-right{grid-column:3;grid-row:1}.system-status{display:none}}
+@media(max-width:600px){.topbar{grid-template-columns:minmax(0,1fr) auto auto;gap:8px;padding:10px 14px}.brand{gap:9px;font-size:15px}.brand-mark{height:38px;width:38px;border-radius:11px}.brand small{font-size:10px}.top-right{gap:0}.account-name{min-height:40px;padding:8px 10px}.app-menu nav{min-width:min(260px,calc(100vw - 28px))}main{padding:22px 14px 40px}main [id]{scroll-margin-top:120px}.heading{align-items:flex-start;flex-direction:column}.heading h1{font-size:23px}.today{display:none}.stat{padding:14px}.stat-value{font-size:24px}.layout,.side{gap:14px}.panel{padding:16px}.panel-head{align-items:flex-start;flex-direction:column}.actions{width:100%}.search,.category-filter{width:100%}.side{grid-template-columns:1fr}th,td{padding-left:8px;padding-right:8px}.auth-card{padding:24px}}
+@media(max-width:420px){.topbar{grid-template-columns:minmax(0,1fr) auto;row-gap:8px}.app-menu{grid-column:2;grid-row:1}.top-right{grid-column:1/-1;grid-row:2;justify-content:flex-end}.brand small{display:none}.account-menu-panel{top:calc(100% + 8px)}}
 @media(max-width:520px){.landing-nav{height:64px;padding:0 18px}.landing-content{padding:28px 20px 40px}.landing-actions{align-items:flex-start;flex-direction:column}.preview-row{gap:8px;padding:10px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
   </style>
@@ -509,7 +540,7 @@ dialog::backdrop{background:#16212b73}
   </section>
   <section class="auth-screen" id="authScreen" hidden><div class="auth-card"><button class="auth-back" type="button" id="backLanding">← Back to ResourceHub</button><div class="auth-brand"><div class="brand-mark" data-shop-logo><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5 12 4l8 4.5v9L12 22l-8-4.5zM4 8.5l8 4.5 8-4.5M12 13v9m-8-13 8 4.5 8-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><img class="shop-logo" alt="Shop logo" hidden></div><div><span id="authBrandName">ResourceHub</span><small style="display:block;color:#718096;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase">Vendor stock desk</small></div></div><h1 id="authTitle">Welcome back</h1><p id="authSubtitle">Sign in to manage shop items and stock.</p><div class="tabs auth-tabs"><button class="tab active" type="button" data-auth-mode="login">Sign in</button><button class="tab" type="button" id="registerTab" data-auth-mode="register">Create owner account</button></div><form id="authForm"><div class="field" id="nameField" hidden><label for="authName">Your name</label><input id="authName" autocomplete="name" maxlength="80"></div><div class="field"><label for="authUsername">Username</label><input id="authUsername" autocomplete="username" minlength="3" maxlength="40" required></div><div class="field"><label for="authPassword">Password</label><input id="authPassword" type="password" autocomplete="current-password" minlength="10" required></div><button class="btn full" type="submit" id="authSubmit">Sign in</button><div class="auth-error" id="authError" role="alert"></div></form><button class="auth-back" type="button" id="forgotLink" style="margin:14px 0 0">Forgot your password?</button><form id="resetForm" hidden><h2 style="font-size:17px;margin:0 0 4px">Reset your password</h2><p class="subtle" style="margin:0 0 14px">Owners get a code at the email address used to register. Staff: ask your shop owner to reset your password.</p><div class="field"><label for="resetUsername">Username</label><input id="resetUsername" autocomplete="username" maxlength="40" required></div><button class="btn secondary full" type="button" id="resetSend">Email me a code</button><div class="field" style="margin-top:14px"><label for="resetCode">Code from the email</label><input id="resetCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required></div><div class="field"><label for="resetPassword">New password (at least 10 characters)</label><input id="resetPassword" type="password" minlength="10" autocomplete="new-password" required></div><button class="btn full" type="submit">Set new password</button><div class="auth-error" id="resetMessage" role="status"></div><button class="auth-back" type="button" id="resetBack" style="margin:0">Back to sign in</button></form><div class="subtle">Your accounts and inventory are stored in the configured data directory.</div></div></section>
   <div id="appScreen" hidden>
-  <header class="topbar"><div class="brand"><div class="brand-mark" data-shop-logo><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5 12 4l8 4.5v9L12 22l-8-4.5zM4 8.5l8 4.5 8-4.5M12 13v9m-8-13 8 4.5 8-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><img class="shop-logo" alt="Shop logo" hidden></div><div><span id="appBrandName">ResourceHub</span><small>Digital vendor stock desk</small></div></div><details class="app-menu"><summary aria-label="Open page navigation">Menu</summary><nav aria-label="Main navigation"><a href="#dashboard">Dashboard</a><a href="#inventory">Inventory</a><a href="#transactions">Transactions</a><a href="#loans">Loans</a><a id="reportsNavLink" href="#reportsPanel">Reports</a><a id="auditNavLink" href="#auditPanel">Audit Log</a></nav></details><div class="top-right"><span class="live"></span><span class="status-text">Inventory system online</span><span class="account-name" id="accountName"></span><button class="logout" id="shopSettingsButton" hidden>Shop settings</button><button class="logout" id="staffButton" hidden>Manage staff</button><button class="logout" id="passwordButton" type="button">Change password</button><button class="logout" id="logoutButton">Sign out</button></div></header>
+  <header class="topbar"><div class="brand"><div class="brand-mark" data-shop-logo><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5 12 4l8 4.5v9L12 22l-8-4.5zM4 8.5l8 4.5 8-4.5M12 13v9m-8-13 8 4.5 8-4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><img class="shop-logo" alt="Shop logo" hidden></div><div><span id="appBrandName">ResourceHub</span><small>Digital vendor stock desk</small></div></div><details class="app-menu" id="appMenu"><summary aria-label="Open page navigation">Menu</summary><nav aria-label="Main navigation"><a href="#dashboard">Dashboard</a><a href="#inventory">Inventory</a><a href="#transactions">Transactions</a><a href="#loans">Loans</a><a id="reportsNavLink" href="#reportsPanel">Reports</a><a id="auditNavLink" href="#auditPanel">Audit Log</a></nav></details><div class="top-right" role="group" aria-label="Shop status and account menu"><div class="system-status" role="status"><span class="live" aria-hidden="true"></span><span class="status-text">Inventory online</span></div><details class="account-menu" id="accountMenu"><summary class="account-name" id="accountName" aria-label="Open account menu"></summary><div class="account-menu-panel" aria-label="Account actions"><button class="logout" id="shopSettingsButton" type="button" hidden>Shop settings</button><button class="logout" id="staffButton" type="button" hidden>Manage staff</button><button class="logout" id="passwordButton" type="button">Change password</button><button class="logout" id="logoutButton" type="button">Sign out</button></div></details></div></header>
   <main>
     <section class="heading" id="dashboard"><div><div class="eyebrow">Operations overview</div><h1>Vendor stock desk</h1><p>Track items in stock, disbursements, and what remains to help plan restocking.</p></div><div class="today" id="today"></div></section>
     <section class="stats" aria-label="Inventory summary"><article class="stat"><div class="stat-label">Total items</div><div class="stat-value" id="totalUnits">—</div><div class="stat-foot">units across all resources</div></article><article class="stat"><div class="stat-label">Remaining in stock</div><div class="stat-value" id="availableUnits">—</div><div class="stat-foot">units currently in stock</div></article><article class="stat"><div class="stat-label">Disbursed / on loan</div><div class="stat-value" id="borrowedUnits">—</div><div class="stat-foot">units currently disbursed or on loan</div></article><article class="stat"><div class="stat-label">Item types</div><div class="stat-value" id="resourceCount">—</div><div class="stat-foot">items in your catalog</div></article></section>
@@ -543,6 +574,13 @@ dialog::backdrop{background:#16212b73}
     const $ = selector => document.querySelector(selector);
     let state = null, mode = 'borrow', currentRole = 'staff', registrationOpen = false, toastTimer, historyTimer, pendingLogo = null, turnstileSiteKey = '';
     $('#today').textContent = new Intl.DateTimeFormat(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'}).format(new Date());
+    const pageLinks=[...document.querySelectorAll('.app-menu nav a')];
+    function updateActivePageLink(){const current=location.hash||'#dashboard';pageLinks.forEach(link=>{const active=link.getAttribute('href')===current;link.classList.toggle('active',active);if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current')})}
+    window.addEventListener('hashchange',updateActivePageLink);updateActivePageLink();
+    document.addEventListener('click',event=>{['appMenu','accountMenu'].forEach(id=>{const menu=$('#'+id);if(menu.open&&!menu.contains(event.target))menu.open=false})});
+    document.addEventListener('keydown',event=>{if(event.key!=='Escape'||document.querySelector('dialog[open]'))return;for(const id of ['accountMenu','appMenu']){const menu=$('#'+id);if(menu.open){menu.open=false;menu.querySelector('summary').focus();break}}});
+    $('#appMenu').addEventListener('click',event=>{if(event.target.closest('a'))$('#appMenu').open=false});
+    $('#accountMenu').addEventListener('click',event=>{if(event.target.closest('button'))$('#accountMenu').open=false});
     function esc(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     async function api(path, body){const response=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});const data=await response.json();if(!response.ok)throw new Error(data.error||'Something went wrong.');return data}
     function money(value){const currency=state?.settings?.currency||'NGN';try{return new Intl.NumberFormat(undefined,{style:'currency',currency}).format(Number(value)||0)}catch(error){return Number(value||0).toFixed(2)+' '+currency}}
@@ -1154,8 +1192,11 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, {"message": message})
         except ValueError as error:
             self.respond(400, {"error": str(error)})
-        except (OSError, sqlite3.Error):
-            self.respond(500, {"error": "Could not create a safety backup, so no change was recorded."})
+        except (OSError, sqlite3.Error) as error:
+            print(f"Inventory action {path} failed: {error!r}", flush=True)
+            self.respond(500, {
+                "error": "Could not complete this change. Check the server terminal for the cause and check inventory before retrying."
+            })
 
     def handle_staff_creation(self):
         try:

@@ -33,7 +33,7 @@
           <strong id="account-menu-title">{{ session.get('username') }} · {{ session.get('role')|title }}</strong>
           <ul>
             {% if session.get('role') == 'admin' %}<li><a href="{{ url_for('settings_page') }}">Settings</a></li>{% endif %}
-            <li>Change password</li>
+            <li><a href="{{ url_for('change_password_page') }}">Change password</a></li>
           </ul>
           <form action="{{ url_for('logout_page') }}" method="post">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -10,6 +10,7 @@ import sqlite3
 from urllib.parse import quote
 
 from flask import Flask, abort, redirect, render_template, request, send_file, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import main as inventory
 import audit
@@ -54,10 +55,28 @@ def authenticate(username, password):
     password_bytes = password.encode("utf-8")
     for configured_username, configured_password, role in configured_accounts():
         username_ok = hmac.compare_digest(username_bytes, configured_username.encode("utf-8"))
-        password_ok = hmac.compare_digest(password_bytes, configured_password.encode("utf-8"))
+        if not username_ok:
+            continue
+        saved_hash = saved_password_hash(configured_username)
+        password_ok = (check_password_hash(saved_hash, password)
+                       if saved_hash else hmac.compare_digest(password_bytes, configured_password.encode("utf-8")))
         if username_ok and password_ok:
             return configured_username, role
     return None
+
+
+def saved_password_hash(username):
+    """Read an optional per-account password override from the shop database."""
+    if not os.path.isfile(inventory.DB_FILE):
+        return None
+    try:
+        with inventory.connect() as db:
+            row = db.execute(
+                "SELECT password_hash FROM flask_password_overrides WHERE username=?", (username,)
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    return row["password_hash"] if row else None
 
 
 ADMIN_ENDPOINTS = {
@@ -127,6 +146,41 @@ def login_page():
 def logout_page():
     session.clear()
     return redirect(url_for("login_page"))
+
+
+@app.route("/change-password", methods=["GET", "POST"])
+def change_password_page():
+    inventory.load_data()
+    notice = ""
+    succeeded = request.args.get("success") == "1"
+    if request.method == "POST":
+        current_password = request.form.get("current_password", "")
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+        account = authenticate(session.get("username", ""), current_password)
+        if not account:
+            notice = "Your current password is incorrect."
+        elif len(new_password) < 12:
+            notice = "Use at least 12 characters for your new password."
+        elif len(new_password) > 128:
+            notice = "Your new password must be 128 characters or fewer."
+        elif not hmac.compare_digest(new_password.encode("utf-8"), confirm_password.encode("utf-8")):
+            notice = "The new passwords do not match."
+        elif hmac.compare_digest(new_password.encode("utf-8"), current_password.encode("utf-8")):
+            notice = "Choose a new password that is different from your current one."
+        else:
+            inventory.backup_database()
+            with inventory.connect() as db:
+                db.execute("""CREATE TABLE IF NOT EXISTS flask_password_overrides (
+                    username TEXT PRIMARY KEY, password_hash TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )""")
+                db.execute("""INSERT INTO flask_password_overrides(username,password_hash)
+                    VALUES(?,?) ON CONFLICT(username) DO UPDATE SET
+                    password_hash=excluded.password_hash,updated_at=CURRENT_TIMESTAMP""",
+                           (account[0], generate_password_hash(new_password)))
+            return redirect(url_for("change_password_page", success="1"))
+    return render_template("change_password.html", notice=notice, succeeded=succeeded)
 
 
 @app.route("/")

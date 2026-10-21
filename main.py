@@ -60,7 +60,7 @@ def backup_database():
             os.remove(temporary_path)
 
 
-def init_db():
+def init_db(seed_defaults=True):
     database_was_present = Path(DB_FILE).exists()
     if database_was_present:
         backup_database()
@@ -169,12 +169,12 @@ def init_db():
                 CREATE INDEX loan_resource_type ON loans(resource_id,type);
                 CREATE INDEX loan_fellow_resource ON loans(fellow_id,resource_id);
             """)
-        if db.execute("SELECT COUNT(*) FROM resources").fetchone()[0] == 0:
+        if seed_defaults and db.execute("SELECT COUNT(*) FROM resources").fetchone()[0] == 0:
             db.executemany("INSERT INTO resources(id,name,category,total) VALUES(?,?,?,?)", [
                 ("R001", "Laptop", "Electronics", 10),
                 ("R002", "Keyboard", "Accessories", 5),
                 ("R003", "Headset", "Accessories", 3)])
-        if db.execute("SELECT COUNT(*) FROM fellows").fetchone()[0] == 0:
+        if seed_defaults and db.execute("SELECT COUNT(*) FROM fellows").fetchone()[0] == 0:
             db.executemany("INSERT INTO fellows VALUES(?,?)", [("F001", "Ada"), ("F002", "John"), ("F003", "Grace")])
         # Import the previous JSON store once. Leave an invalid or unrecognized
         # file untouched and use the clean starter data instead.
@@ -341,7 +341,13 @@ def add_resource(resource_id, name, category, total, sku="", price=0, supplier="
         return False, "Cost price must be a non-negative number."
     if type(reorder_level) is not int or reorder_level < 0:
         return False, "Restock threshold must be a non-negative whole number."
-    backup_database()
+    backup_warning = ""
+    try:
+        backup_database()
+    except (OSError, sqlite3.Error):
+        # A backup failure should be reported, but must not prevent the owner
+        # from adding stock when the shop database itself is still writable.
+        backup_warning = " The safety backup could not be created."
     try:
         with connect() as db:
             db.execute("""INSERT INTO resources(id,name,category,total,sku,price,cost_price,supplier,reorder_level)
@@ -352,7 +358,7 @@ def add_resource(resource_id, name, category, total, sku="", price=0, supplier="
     except sqlite3.IntegrityError:
         return False, f"Resource ID {rid} already exists."
     refresh_state()
-    return True, f"Added {name} ({rid}) with {total} unit(s)."
+    return True, f"Added {name} ({rid}) with {total} unit(s).{backup_warning}"
 
 
 def update_resource_cost_price(resource_id, cost_price):
