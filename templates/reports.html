@@ -14,7 +14,7 @@
       <article class="dashboard-stat"><span>Total sales</span><strong>{{ '%.2f'|format(sales_total) }}</strong><small>Recorded sales value</small></article>
       <article class="dashboard-stat"><span>Available units</span><strong>{{ summary.available_units }}</strong><small>Current stock</small></article>
       <article class="dashboard-stat"><span>Stock value</span><strong>{{ '%.2f'|format(stock_value) }}</strong><small>Available units × unit price</small></article>
-      <article class="dashboard-stat"><span>Borrowed units</span><strong>{{ summary.borrowed_units }}</strong><small>Currently on loan</small></article>
+      <article class="dashboard-stat"><span>Units sold on credit</span><strong>{{ summary.borrowed_units }}</strong><small>Still owed by customers</small></article>
     </section>
     <section class="inventory-panel" aria-label="Sales and stock by item">
       <div class="table-scroll"><table class="inventory-table">

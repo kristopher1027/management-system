@@ -1,28 +1,28 @@
 {% extends "base.html" %}
 
-{% block title %}Transactions · ResourceHub{% endblock %}
+{% block title %}Sales history · ResourceHub{% endblock %}
 {% block page_class %}transactions-page{% endblock %}
 
 {% block content %}
   <section class="transactions-page">
     <div class="page-heading">
       <p class="eyebrow">ACTIVITY</p>
-      <h1>Transaction history</h1>
-      <p>Search sales, stock changes, loans, and returns.</p>
+      <h1>Sales history</h1>
+      <p>Search sales, stock changes, credit sales, and customer returns.</p>
     </div>
     <section class="inventory-panel" aria-label="Transaction history">
       <form class="inventory-filters" action="{{ url_for('transactions_page') }}" method="get">
-        <label class="filter-search"><span>Search item or fellow</span><input type="search" name="q" value="{{ search_text }}" placeholder="Search transactions"></label>
+        <label class="filter-search"><span>Search item or customer</span><input type="search" name="q" value="{{ search_text }}" placeholder="Search transactions"></label>
         <label class="filter-category"><span>Type</span><select name="type">
-          {% for value,label in [('all','All transactions'),('sale','Sales'),('opening_stock','Opening stock'),('restock','Restocks'),('borrow','Loans'),('return','Returns'),('damaged','Damaged or lost')] %}
+          {% for value,label in [('all','All transactions'),('sale','Sales'),('opening_stock','Opening stock'),('restock','Restocks'),('borrow','Credit sales'),('return','Customer returns'),('damaged','Damaged or lost')] %}
             <option value="{{ value }}" {% if selected_type == value %}selected{% endif %}>{{ label }}</option>
           {% endfor %}
         </select></label>
         <button class="button-primary" type="submit">Search history</button>
       </form>
       <div class="table-scroll"><table class="inventory-table">
-        <thead><tr><th scope="col">Date and time</th><th scope="col">Type</th><th scope="col">Item</th><th scope="col">Quantity</th><th scope="col">Customer / fellow</th></tr></thead>
-        <tbody>{% for row in rows %}<tr><td>{{ row.created_at }}</td><td>{{ row.type|replace('_',' ')|title }}</td><td>{{ row.resource_name }}</td><td>{{ row.quantity }}</td><td>{{ row.person or '—' }}</td></tr>
+        <thead><tr><th scope="col">Date and time</th><th scope="col">Type</th><th scope="col">Item</th><th scope="col">Quantity</th><th scope="col">Customer</th></tr></thead>
+        <tbody>{% for row in rows %}<tr><td>{{ row.created_at }}</td><td>{{ 'Credit sale' if row.type == 'borrow' else 'Customer return' if row.type == 'return' else row.type|replace('_',' ')|title }}</td><td>{{ row.resource_name }}</td><td>{{ row.quantity }}</td><td>{{ row.person or '—' }}</td></tr>
           {% else %}<tr><td colspan="5" class="empty-results">No matching transactions yet.</td></tr>{% endfor %}</tbody>
       </table></div>
     </section>

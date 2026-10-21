@@ -8,6 +8,7 @@ import re
 import sqlite3
 import tempfile
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 DATA_DIR = os.path.abspath(os.environ.get("RESOURCEHUB_DATA_DIR", os.getcwd()))
@@ -120,6 +121,24 @@ def init_db():
         sale_columns = {row["name"] for row in db.execute("PRAGMA table_info(sales)")}
         if "unit_price" not in sale_columns:
             db.execute("ALTER TABLE sales ADD COLUMN unit_price REAL NOT NULL DEFAULT 0")
+            sale_columns.add("unit_price")
+        if "customer_id" not in sale_columns:
+            db.execute("ALTER TABLE sales ADD COLUMN customer_id TEXT REFERENCES fellows(id)")
+            db.execute("""UPDATE sales SET customer_id=(
+                SELECT CASE WHEN COUNT(*)=1 THEN MIN(f.id) END FROM fellows f
+                WHERE LOWER(TRIM(f.name))=LOWER(TRIM(sales.customer))
+            ) WHERE TRIM(customer)<>''""")
+            sale_columns.add("customer_id")
+        if "sale_type" not in sale_columns:
+            db.execute("ALTER TABLE sales ADD COLUMN sale_type TEXT NOT NULL DEFAULT 'cash'")
+            sale_columns.add("sale_type")
+        db.execute("""CREATE TABLE IF NOT EXISTS sale_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+            amount REAL NOT NULL CHECK(amount > 0),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""")
+        db.execute("CREATE INDEX IF NOT EXISTS sale_payment_sale ON sale_payments(sale_id)")
         loan_schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='loans'").fetchone()[0]
         if "damaged" not in loan_schema:
             db.executescript("""
@@ -404,18 +423,97 @@ def record_sale(resource_id, quantity, customer=""):
     return True, f"Recorded sale of {quantity} x {resource['name']}{who}."
 
 
+def record_credit_sale(customer_id, resource_id, quantity, amount_paid):
+    """Record a customer sale and its first payment as one atomic change."""
+    fid = str(customer_id).strip().upper()
+    rid = str(resource_id).strip().upper()
+    if type(quantity) is not int or quantity <= 0:
+        return False, "Quantity must be a positive whole number."
+    try:
+        paid = Decimal(str(amount_paid))
+        if not paid.is_finite() or paid < 0 or paid != paid.quantize(Decimal("0.01")):
+            raise InvalidOperation
+    except (InvalidOperation, ValueError):
+        return False, "Amount received must be a non-negative amount with up to 2 decimal places."
+
+    backup_database()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        customer = db.execute("SELECT name FROM fellows WHERE id=?", (fid,)).fetchone()
+        if not customer:
+            return False, "Choose an existing customer."
+        resource = db.execute("SELECT name,total,price FROM resources WHERE id=?", (rid,)).fetchone()
+        if not resource:
+            return False, f"Unknown item ID: {rid}"
+        loan_balance = db.execute("""SELECT COALESCE(SUM(CASE
+          WHEN type IN ('borrow','damaged') THEN quantity WHEN type='return' THEN -quantity ELSE 0 END),0)
+          FROM loans WHERE resource_id=?""", (rid,)).fetchone()[0]
+        sold = db.execute("SELECT COALESCE(SUM(quantity),0) FROM sales WHERE resource_id=?", (rid,)).fetchone()[0]
+        available = resource["total"] - loan_balance - sold
+        if quantity > available:
+            return False, f"Only {available} unit(s) of {resource['name']} remain in stock; you asked for {quantity}."
+
+        total = (Decimal(str(resource["price"])) * quantity).quantize(Decimal("0.01"))
+        if paid > total:
+            return False, f"Amount received cannot exceed the sale total of NGN {total:.2f}."
+        now = current_timestamp()
+        cursor = db.execute("""INSERT INTO sales
+          (resource_id,quantity,unit_price,customer,customer_id,sale_type,created_at)
+          VALUES(?,?,?,?,?,'credit',?)""",
+          (rid, quantity, resource["price"], customer["name"], fid, now))
+        if paid > 0:
+            db.execute("INSERT INTO sale_payments(sale_id,amount,created_at) VALUES(?,?,?)",
+                       (cursor.lastrowid, float(paid), now))
+
+    refresh_state()
+    due = total - paid
+    status = "paid in full" if due == 0 else ("part-paid" if paid > 0 else "unpaid")
+    return True, f"Recorded {status} sale of {quantity} x {resource['name']} for {customer['name']}; NGN {due:.2f} remains owed."
+
+
+def record_sale_payment(sale_id, amount):
+    """Add a payment to an unpaid credit sale without allowing overpayment."""
+    try:
+        sale_id = int(sale_id)
+        payment = Decimal(str(amount))
+        if sale_id <= 0 or not payment.is_finite() or payment <= 0 or payment != payment.quantize(Decimal("0.01")):
+            raise InvalidOperation
+    except (InvalidOperation, ValueError, TypeError):
+        return False, "Enter a valid payment amount greater than zero."
+
+    backup_database()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        sale = db.execute("""SELECT quantity,unit_price,sale_type FROM sales WHERE id=?""", (sale_id,)).fetchone()
+        if not sale or sale["sale_type"] != "credit":
+            return False, "That credit sale was not found."
+        total = (Decimal(str(sale["unit_price"])) * sale["quantity"]).quantize(Decimal("0.01"))
+        paid = Decimal(str(db.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM sale_payments WHERE sale_id=?", (sale_id,)
+        ).fetchone()[0])).quantize(Decimal("0.01"))
+        due = total - paid
+        if payment > due:
+            return False, f"Payment is more than the NGN {due:.2f} still owed."
+        db.execute("INSERT INTO sale_payments(sale_id,amount,created_at) VALUES(?,?,?)",
+                   (sale_id, float(payment), current_timestamp()))
+
+    refresh_state()
+    remaining = due - payment
+    return True, f"Payment recorded. NGN {remaining:.2f} remains owed."
+
+
 def add_fellow(fellow_id, name):
     fid, name = fellow_id.strip().upper(), name.strip()
     if not fid or not name:
-        return False, "Fellow ID and name cannot be empty."
+        return False, "Customer ID and name cannot be empty."
     backup_database()
     try:
         with connect() as db:
             db.execute("INSERT INTO fellows VALUES(?,?)", (fid, name))
     except sqlite3.IntegrityError:
-        return False, f"Fellow ID {fid} already exists."
+        return False, f"Customer ID {fid} already exists."
     refresh_state()
-    return True, f"Added fellow {name} ({fid})."
+    return True, f"Added customer {name} ({fid})."
 
 
 def remove_fellow(fellow_id):

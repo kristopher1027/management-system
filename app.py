@@ -202,7 +202,7 @@ def handle_transaction(mode):
 
     # Match the CLI: required IDs and a positive whole-number quantity.
     if not values["fellow_id"]:
-        return transaction_form(mode, "Fellow ID cannot be empty.", False, values)
+        return transaction_form(mode, "Choose a customer.", False, values)
     if not values["resource_id"]:
         return transaction_form(mode, "Resource ID cannot be empty.", False, values)
     if not values["quantity"].isdigit() or int(values["quantity"]) <= 0:
@@ -235,6 +235,23 @@ def return_route():
     return transaction_form("return")
 
 
+@app.route("/sales/credit", methods=["POST"])
+def credit_sale_page():
+    inventory.load_data()
+    quantity_text = request.form.get("quantity", "").strip()
+    if not quantity_text.isdigit() or int(quantity_text) <= 0:
+        message = "Quantity must be a positive whole number."
+        succeeded = False
+    else:
+        succeeded, message = inventory.record_credit_sale(
+            request.form.get("customer_id", ""),
+            request.form.get("resource_id", ""),
+            int(quantity_text),
+            request.form.get("amount_paid", "0"),
+        )
+    return redirect(url_for("dashboard_page", notice=message, success="1" if succeeded else "0"))
+
+
 @app.route("/dashboard")
 def dashboard_page():
     inventory.load_data()
@@ -246,7 +263,8 @@ def dashboard_page():
     return render_template("dashboard.html", summary=summary, recent_sales=recent_sales,
                            fellows=[{"id": fid, "name": name} for fid, name in inventory.fellows.items()],
                            resources=inventory.resources,
-                           default_due_date=(date.today() + timedelta(days=inventory.LOAN_DAYS)).isoformat())
+                           notice=request.args.get("notice", ""),
+                           succeeded=request.args.get("success") == "1")
 
 
 @app.route("/transactions")
@@ -276,9 +294,8 @@ def transactions_page():
     return render_template("history.html", rows=rows, search_text=search_text, selected_type=selected_type)
 
 
-@app.route("/loans")
-def loans_page():
-    inventory.load_data()
+def current_customer_items():
+    """Return outstanding item quantities grouped by customer name and ID."""
     with inventory.connect() as db:
         loans = [dict(row) for row in db.execute("""SELECT f.id AS fellow_id,f.name AS fellow_name,
             r.id AS resource_id,r.name AS resource_name,
@@ -288,7 +305,75 @@ def loans_page():
     grouped = defaultdict(list)
     for loan in loans:
         grouped[(loan["fellow_id"], loan["fellow_name"])].append(loan)
-    return render_template("loans.html", loan_groups=list(grouped.items()))
+    return list(grouped.items())
+
+
+def customer_purchase_history():
+    """Return recorded sales, credit sales, and customer returns by customer ID."""
+    history = {}
+    with inventory.connect() as db:
+        for customer_id, customer_name in inventory.fellows.items():
+            rows = db.execute("""SELECT * FROM (
+                SELECT s.id AS sale_id, s.created_at AS created_at,
+                       CASE WHEN s.sale_type='credit' THEN 'Credit sale' ELSE 'Sale' END AS transaction_type,
+                       r.name AS item_name, s.quantity AS quantity,
+                       s.unit_price AS unit_price, s.sale_type AS sale_type,
+                       ROUND(s.quantity*s.unit_price,2) AS sale_total,
+                       ROUND(COALESCE((SELECT SUM(p.amount) FROM sale_payments p WHERE p.sale_id=s.id),0),2) AS amount_paid,
+                       ROUND(MAX(0,s.quantity*s.unit_price-COALESCE((SELECT SUM(p.amount) FROM sale_payments p WHERE p.sale_id=s.id),0)),2) AS amount_owed
+                FROM sales s JOIN resources r ON r.id=s.resource_id
+                WHERE s.customer_id=? OR (s.customer_id IS NULL AND LOWER(TRIM(s.customer))=LOWER(TRIM(?)))
+                UNION ALL
+                SELECT NULL AS sale_id, l.created_at AS created_at,
+                       CASE WHEN l.type='borrow' THEN 'Credit sale' ELSE 'Customer return' END AS transaction_type,
+                       r.name AS item_name, l.quantity AS quantity,
+                       NULL AS unit_price, 'legacy' AS sale_type,
+                       NULL AS sale_total, NULL AS amount_paid, NULL AS amount_owed
+                FROM loans l JOIN resources r ON r.id=l.resource_id
+                WHERE l.fellow_id=? AND l.type IN ('borrow','return')
+            ) ORDER BY created_at DESC""", (customer_id, customer_name, customer_id)).fetchall()
+            history[customer_id] = [dict(row) for row in rows]
+    return history
+
+
+@app.route("/customers")
+def customers_page():
+    inventory.load_data()
+    customers = [{"id": fid, "name": name} for fid, name in inventory.fellows.items()]
+    return render_template(
+        "customers.html",
+        customer_groups=current_customer_items(),
+        customers=customers,
+        purchase_history=customer_purchase_history(),
+        notice=request.args.get("notice", ""),
+        notice_success=request.args.get("added") == "1",
+    )
+
+
+@app.route("/customers/add", methods=["POST"])
+def add_customer_page():
+    inventory.load_data()
+    customer_id = request.form.get("customer_id", "").strip()
+    customer_name = request.form.get("customer_name", "").strip()
+    success, message = inventory.add_fellow(customer_id, customer_name)
+    return redirect(url_for(
+        "customers_page", notice=message, added="1" if success else "0"
+    ))
+
+
+@app.route("/sales/<int:sale_id>/payments", methods=["POST"])
+def sale_payment_page(sale_id):
+    success, message = inventory.record_sale_payment(
+        sale_id, request.form.get("amount", "")
+    )
+    return redirect(url_for(
+        "customers_page", notice=message, added="1" if success else "0"
+    ))
+
+
+@app.route("/loans")
+def loans_page():
+    return redirect(url_for("customers_page"))
 
 
 @app.route("/reports")

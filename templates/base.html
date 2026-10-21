@@ -16,8 +16,8 @@
         <nav aria-label="Main navigation">
           <a class="nav-link{% if request.endpoint == 'dashboard_page' %} active{% endif %}" href="{{ url_for('dashboard_page') }}"{% if request.endpoint == 'dashboard_page' %} aria-current="page"{% endif %}>Dashboard</a>
           <a class="nav-link{% if request.endpoint in ['inventory_page', 'add_item_page'] %} active{% endif %}" href="{{ url_for('inventory_page') }}"{% if request.endpoint in ['inventory_page', 'add_item_page'] %} aria-current="page"{% endif %}>Inventory</a>
-          <a class="nav-link{% if request.endpoint in ['transactions_page', 'borrow_route', 'return_route'] %} active{% endif %}" href="{{ url_for('transactions_page') }}"{% if request.endpoint in ['transactions_page', 'borrow_route', 'return_route'] %} aria-current="page"{% endif %}>Transactions</a>
-          <a class="nav-link{% if request.endpoint == 'loans_page' %} active{% endif %}" href="{{ url_for('loans_page') }}"{% if request.endpoint == 'loans_page' %} aria-current="page"{% endif %}>Loans</a>
+          <a class="nav-link{% if request.endpoint in ['transactions_page', 'borrow_route', 'return_route'] %} active{% endif %}" href="{{ url_for('transactions_page') }}"{% if request.endpoint in ['transactions_page', 'borrow_route', 'return_route'] %} aria-current="page"{% endif %}>Sales</a>
+          <a class="nav-link{% if request.endpoint in ['customers_page', 'loans_page'] %} active{% endif %}" href="{{ url_for('customers_page') }}"{% if request.endpoint in ['customers_page', 'loans_page'] %} aria-current="page"{% endif %}>Customers</a>
           {% if session.get('role') == 'admin' %}
             <a class="nav-link{% if request.endpoint in ['reports_page', 'reports_export', 'reports_backup'] %} active{% endif %}" href="{{ url_for('reports_page') }}"{% if request.endpoint in ['reports_page', 'reports_export', 'reports_backup'] %} aria-current="page"{% endif %}>Reports</a>
             <a class="nav-link{% if request.endpoint in ['audit_log_page', 'audit_log_export'] %} active{% endif %}" href="{{ url_for('audit_log_page') }}"{% if request.endpoint in ['audit_log_page', 'audit_log_export'] %} aria-current="page"{% endif %}>Audit Log</a>
@@ -42,12 +42,12 @@
     {% endif %}
   </header>
 
-  <main id="main-content" class="page-content {% block page_class %}{% endblock %}">
+  <main id="main-content" tabindex="-1" class="page-content {% block page_class %}{% endblock %}">
     {% block content %}{% endblock %}
   </main>
 
   <footer class="site-footer">
-    <p>ResourceHub · Campus equipment lending</p>
+    <p>ResourceHub · Shop sales and stock</p>
   </footer>
 </body>
 </html>

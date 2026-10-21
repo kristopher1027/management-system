@@ -6,37 +6,40 @@
 {% block content %}
   <section class="dashboard-page">
     <div class="page-heading">
-      <p class="eyebrow">CAMPUS OVERVIEW</p>
-      <h1>Resource dashboard</h1>
-      <p>A quick summary of equipment availability and lending.</p>
+      <p class="eyebrow">SHOP OVERVIEW</p>
+      <h1>Shop dashboard</h1>
+      <p>A quick summary of stock levels and sales.</p>
     </div>
 
     <section class="dashboard-stats" aria-label="Inventory totals">
       <article class="dashboard-stat total-stat"><span>Total units</span><strong>{{ summary.total_units }}</strong><small>Across all resources</small></article>
-      <article class="dashboard-stat available-stat"><span>Available</span><strong>{{ summary.available_units }}</strong><small>Ready to borrow</small></article>
-      <article class="dashboard-stat borrowed-stat"><span>Borrowed</span><strong>{{ summary.borrowed_units }}</strong><small>Currently held by fellows</small></article>
+      <article class="dashboard-stat available-stat"><span>In stock</span><strong>{{ summary.available_units }}</strong><small>Available for sale</small></article>
+      <article class="dashboard-stat borrowed-stat"><span>Sold on credit</span><strong>{{ summary.borrowed_units }}</strong><small>Units customers still owe for</small></article>
       <article class="dashboard-stat"><span>Damaged or lost</span><strong>{{ summary.damaged_units }}</strong><small>Unavailable units</small></article>
     </section>
 
     <div class="dashboard-panels">
       <section class="dashboard-panel" aria-labelledby="quick-transaction-title">
-        <div class="dashboard-panel-heading"><div><p class="eyebrow">LOAN DESK</p><h2 id="quick-transaction-title">Quick transaction</h2></div></div>
-        <form action="{{ url_for('borrow_route') }}" method="post" class="transaction-form">
+        <div class="dashboard-panel-heading"><div><p class="eyebrow">SALES</p><h2 id="quick-transaction-title">Quick sale</h2></div></div>
+        {% if notice %}<p class="form-message {{ 'success' if succeeded else 'error' }}" role="status">{{ notice }}</p>{% endif %}
+        <form action="{{ url_for('credit_sale_page') }}" method="post" class="transaction-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <label for="quick-fellow">Fellow</label>
-          <select id="quick-fellow" name="fellow_id" required>
-            <option value="">Choose a fellow</option>
+          <label for="quick-fellow">Customer</label>
+          <select id="quick-fellow" name="customer_id" required>
+            <option value="">Choose a customer</option>
             {% for fellow in fellows %}<option value="{{ fellow.id }}">{{ fellow.name }} ({{ fellow.id }})</option>{% endfor %}
           </select>
-          <label for="quick-resource">Equipment</label>
+          <label for="quick-resource">Shop item</label>
           <select id="quick-resource" name="resource_id" required>
-            <option value="">Choose equipment</option>
+            <option value="">Choose an item</option>
             {% for resource in resources %}<option value="{{ resource.id }}">{{ resource.name }} · {{ resource.available }} available</option>{% endfor %}
           </select>
           <label for="quick-quantity">Quantity</label>
           <input id="quick-quantity" name="quantity" type="number" min="1" step="1" value="1" required>
-          <input type="hidden" name="due_date" value="{{ default_due_date }}">
-          <button class="button-primary" type="submit" {% if not fellows or not resources %}disabled{% endif %}>Record borrow</button>
+          <label for="quick-amount-paid">Amount received now (NGN)</label>
+          <input id="quick-amount-paid" name="amount_paid" type="number" min="0" step="0.01" value="0" required>
+          <small>Enter 0 for unpaid, a smaller amount for part-paid, or the full sale total.</small>
+          <button class="button-primary" type="submit" {% if not fellows or not resources %}disabled{% endif %}>Record sale</button>
         </form>
       </section>
 
@@ -69,23 +72,6 @@
         {% endif %}
       </section>
 
-      <section class="dashboard-panel" aria-labelledby="most-borrowed-title">
-        <div class="dashboard-panel-heading"><div><p class="eyebrow">LENDING ACTIVITY</p><h2 id="most-borrowed-title">Most borrowed</h2></div></div>
-        {% if summary.most_borrowed %}
-          <ul class="dashboard-list leaders-list">
-            {% for resource in summary.most_borrowed %}
-              <li><span><strong>{{ resource.name }}</strong><small>{{ resource.id }} · {{ resource.category }}</small></span><span class="borrowed-count">{{ resource.borrowed }} <small>on loan</small></span></li>
-            {% endfor %}
-          </ul>
-        {% else %}
-          <div class="empty-state compact-empty">
-            <span class="empty-state-icon" aria-hidden="true">↗</span>
-            <strong>No active loans</strong>
-            <span>Borrowed items will appear here.</span>
-            <a class="button-primary empty-state-action" href="{{ url_for('borrow_route') }}">Record a loan</a>
-          </div>
-        {% endif %}
-      </section>
     </div>
   </section>
 {% endblock %}

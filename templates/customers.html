@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}Customers · ResourceHub{% endblock %}
+{% block page_class %}dashboard-page{% endblock %}
+
+{% block content %}
+  <section class="dashboard-page">
+    <div class="page-heading">
+      <p class="eyebrow">CUSTOMER BALANCES</p>
+      <h1>Customers who owe me</h1>
+      <p>Customer balances and purchase history.</p>
+    </div>
+    {% if notice %}<div class="notice {{ 'success' if notice_success else 'error' }}" role="status">{{ notice }}</div>{% endif %}
+    <section class="dashboard-panel" aria-labelledby="add-customer-title">
+      <div class="dashboard-panel-heading"><h2 id="add-customer-title">Add a customer</h2></div>
+      <form action="{{ url_for('add_customer_page') }}" method="post" class="transaction-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label for="customer-id">Customer ID</label>
+        <input id="customer-id" name="customer_id" maxlength="40" placeholder="For example, C004" required>
+        <label for="customer-name">Customer name</label>
+        <input id="customer-name" name="customer_name" maxlength="100" required>
+        <button class="button-primary" type="submit">Save customer</button>
+      </form>
+    </section>
+    <section class="dashboard-panel" aria-labelledby="customer-list-title">
+      <div class="dashboard-panel-heading"><h2 id="customer-list-title">Customer list</h2></div>
+      {% if customers %}
+        <ul class="dashboard-list">
+          {% for customer in customers %}
+            <li><span><strong>{{ customer.name }}</strong><small>{{ customer.id }}</small></span></li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="dashboard-empty">No customers have been added yet.</p>
+      {% endif %}
+    </section>
+    <section class="dashboard-panel" aria-labelledby="purchase-history-title">
+      <div class="dashboard-panel-heading"><h2 id="purchase-history-title">Purchase history</h2></div>
+      {% if customers %}
+        {% for customer in customers %}
+          <details class="customer-history">
+            <summary>{{ customer.name }} · {{ customer.id }}</summary>
+            {% set purchases = purchase_history.get(customer.id, []) %}
+            {% if purchases %}
+              <div class="table-scroll">
+                <table class="inventory-table">
+                  <thead><tr><th scope="col">Date</th><th scope="col">Type</th><th scope="col">Item</th><th scope="col">Quantity</th><th scope="col">Total (NGN)</th><th scope="col">Paid (NGN)</th><th scope="col">Owed (NGN)</th><th scope="col">Payment</th></tr></thead>
+                  <tbody>
+                    {% for purchase in purchases %}
+                      <tr>
+                        <td>{{ purchase.created_at }}</td><td>{{ purchase.transaction_type }}</td><td>{{ purchase.item_name }}</td><td>{{ purchase.quantity }}</td>
+                        <td>{% if purchase.sale_total is not none %}{{ '%.2f'|format(purchase.sale_total) }}{% else %}—{% endif %}</td>
+                        <td>{% if purchase.amount_paid is not none %}{{ '%.2f'|format(purchase.amount_paid) }}{% else %}—{% endif %}</td>
+                        <td>{% if purchase.amount_owed is not none %}{{ '%.2f'|format(purchase.amount_owed) }}{% else %}—{% endif %}</td>
+                        <td>
+                          {% if purchase.sale_type == 'credit' and purchase.amount_owed > 0 %}
+                            <form action="{{ url_for('sale_payment_page', sale_id=purchase.sale_id) }}" method="post" class="inline-payment-form">
+                              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                              <label class="visually-hidden" for="payment-{{ purchase.sale_id }}">Payment amount for {{ purchase.item_name }}</label>
+                              <input id="payment-{{ purchase.sale_id }}" name="amount" type="number" min="0.01" max="{{ '%.2f'|format(purchase.amount_owed) }}" step="0.01" placeholder="Amount" required>
+                              <button class="button-primary" type="submit">Record payment</button>
+                            </form>
+                          {% elif purchase.sale_type == 'credit' %}Paid in full{% else %}—{% endif %}
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <p class="dashboard-empty">No purchases are recorded for this customer yet.</p>
+            {% endif %}
+          </details>
+        {% endfor %}
+      {% else %}
+        <p class="dashboard-empty">Add a customer to start recording purchase history.</p>
+      {% endif %}
+    </section>
+    {% if customer_groups %}
+      <div class="dashboard-panels">
+        {% for customer, items in customer_groups %}
+          <section class="dashboard-panel" aria-label="Items owed by {{ customer[1] }}">
+            <div class="dashboard-panel-heading">
+              <div><p class="eyebrow">{{ customer[0] }}</p><h2>{{ customer[1] }}</h2></div>
+              <span class="panel-count">{{ items|length }}</span>
+            </div>
+            <ul class="dashboard-list">
+              {% for item in items %}
+                <li>
+                  <span><strong>{{ item.resource_name }}</strong><small>{{ item.resource_id }}</small></span>
+                  <span class="borrowed-count">{{ item.quantity }} <small>owed</small></span>
+                </li>
+              {% endfor %}
+            </ul>
+          </section>
+        {% endfor %}
+      </div>
+    {% else %}
+      <section class="dashboard-panel">
+        <div class="empty-state">
+          <span class="empty-state-icon" aria-hidden="true">✓</span>
+          <strong>No outstanding customer balances</strong>
+          <span>Items owed by customers will appear here.</span>
+        </div>
+      </section>
+    {% endif %}
+  </section>
+{% endblock %}

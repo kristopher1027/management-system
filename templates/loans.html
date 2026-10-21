@@ -1,22 +1,22 @@
 {% extends "base.html" %}
 
-{% block title %}Loans · ResourceHub{% endblock %}
+{% block title %}Customers · ResourceHub{% endblock %}
 {% block page_class %}dashboard-page{% endblock %}
 
 {% block content %}
   <section class="dashboard-page">
-    <div class="page-heading"><p class="eyebrow">LOAN DESK</p><h1>Currently on loan</h1><p>Outstanding equipment grouped by fellow.</p></div>
+    <div class="page-heading"><p class="eyebrow">CUSTOMER BALANCES</p><h1>Customers who owe me</h1><p>Items customers still owe for, grouped by customer.</p></div>
     {% if loan_groups %}
       <div class="dashboard-panels">
         {% for fellow, loans in loan_groups %}
-          <section class="dashboard-panel" aria-label="Loans for {{ fellow[1] }}">
+          <section class="dashboard-panel" aria-label="Items owed by {{ fellow[1] }}">
             <div class="dashboard-panel-heading"><div><p class="eyebrow">{{ fellow[0] }}</p><h2>{{ fellow[1] }}</h2></div><span class="panel-count">{{ loans|length }}</span></div>
-            <ul class="dashboard-list">{% for loan in loans %}<li><span><strong>{{ loan.resource_name }}</strong><small>{{ loan.resource_id }}</small></span><span class="borrowed-count">{{ loan.quantity }} <small>on loan</small></span></li>{% endfor %}</ul>
+            <ul class="dashboard-list">{% for loan in loans %}<li><span><strong>{{ loan.resource_name }}</strong><small>{{ loan.resource_id }}</small></span><span class="borrowed-count">{{ loan.quantity }} <small>owed</small></span></li>{% endfor %}</ul>
           </section>
         {% endfor %}
       </div>
     {% else %}
-      <section class="dashboard-panel"><div class="empty-state"><span class="empty-state-icon" aria-hidden="true">✓</span><strong>No active loans</strong><span>Outstanding items will appear here.</span></div></section>
+      <section class="dashboard-panel"><div class="empty-state"><span class="empty-state-icon" aria-hidden="true">✓</span><strong>No outstanding customer balances</strong><span>Customer balances will appear here.</span></div></section>
     {% endif %}
   </section>
 {% endblock %}

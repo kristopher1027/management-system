@@ -14,7 +14,7 @@
       </form>
       <div class="table-scroll"><table class="inventory-table">
         <thead><tr><th scope="col">Time</th><th scope="col">Who</th><th scope="col">Role</th><th scope="col">Action</th><th scope="col">Item / target</th><th scope="col">Details</th></tr></thead>
-        <tbody>{% for entry in entries %}<tr><td>{{ entry.created_at }}</td><td>{{ entry.actor }}</td><td>{{ entry.role }}</td><td>{{ entry.action }}</td><td>{{ entry.target }}</td><td>{{ entry.detail }}</td></tr>
+        <tbody>{% for entry in entries %}<tr><td>{{ entry.created_at }}</td><td>{{ entry.actor }}</td><td>{{ entry.role }}</td><td>{{ 'Credit sale' if entry.action in ['loan', 'borrow'] else 'Customer return' if entry.action == 'return' else entry.action|replace('_',' ')|title }}</td><td>{{ entry.target }}</td><td>{{ entry.detail }}</td></tr>
           {% else %}<tr><td colspan="6" class="empty-results">No audit entries found.</td></tr>{% endfor %}</tbody>
       </table></div>
     </section>
