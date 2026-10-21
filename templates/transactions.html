@@ -65,7 +65,7 @@
           <input id="return-quantity" name="quantity" type="number" min="1" step="1" value="{{ values.get('quantity', '1') if mode == 'return' else '1' }}" required>
           <p class="field-help">You can only return units this fellow currently holds.</p>
 
-          <button class="button-primary return-button" type="submit" {% if not fellows or not resources %}disabled{% endif %}>Record return</button>
+          <button class="button-primary" type="submit" {% if not fellows or not resources %}disabled{% endif %}>Record return</button>
         </form>
       </section>
     </div>

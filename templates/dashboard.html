@@ -27,7 +27,12 @@
             {% endfor %}
           </ul>
         {% else %}
-          <p class="dashboard-empty">All resources have at least 3 available units.</p>
+          <div class="empty-state compact-empty">
+            <span class="empty-state-icon" aria-hidden="true">✓</span>
+            <strong>Stock levels look good</strong>
+            <span>All resources have at least 3 available units.</span>
+            <a class="button-primary empty-state-action" href="{{ url_for('inventory_page') }}">Browse inventory</a>
+          </div>
         {% endif %}
       </section>
 
@@ -40,7 +45,12 @@
             {% endfor %}
           </ul>
         {% else %}
-          <p class="dashboard-empty">No resources are currently borrowed.</p>
+          <div class="empty-state compact-empty">
+            <span class="empty-state-icon" aria-hidden="true">↗</span>
+            <strong>No active loans</strong>
+            <span>Borrowed items will appear here.</span>
+            <a class="button-primary empty-state-action" href="{{ url_for('borrow_route') }}">Record a loan</a>
+          </div>
         {% endif %}
       </section>
     </div>

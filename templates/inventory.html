@@ -48,7 +48,14 @@
                 <td><span class="stock-badge {{ resource.stock_class }}">{{ resource.stock_label }}</span></td>
               </tr>
             {% else %}
-              <tr><td class="empty-results" colspan="5">No results found. Try another search or category.</td></tr>
+              <tr><td class="empty-results" colspan="5">
+                <div class="empty-state">
+                  <span class="empty-state-icon" aria-hidden="true">⌕</span>
+                  <strong>No matching equipment</strong>
+                  <span>Try a different search or clear your filters to see the full inventory.</span>
+                  <a class="button-primary empty-state-action" href="{{ url_for('inventory_page') }}">View all inventory</a>
+                </div>
+              </td></tr>
             {% endfor %}
           </tbody>
         </table>

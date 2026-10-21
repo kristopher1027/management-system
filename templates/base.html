@@ -16,6 +16,7 @@
       <a class="nav-link {% if request.endpoint in ['borrow_route', 'return_route'] %}active{% endif %}" href="{{ url_for('borrow_route') }}">Borrow / Return</a>
       <a class="nav-link {% if request.endpoint == 'dashboard_page' %}active{% endif %}" href="{{ url_for('dashboard_page') }}">Dashboard</a>
     </nav>
+    <label class="theme-toggle"><input id="theme-toggle" type="checkbox"><span>Dark mode</span></label>
   </header>
 
   <main id="main-content" class="page-content {% block page_class %}{% endblock %}">
