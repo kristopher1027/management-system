@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}Audit log · ResourceHub{% endblock %}
+{% block page_class %}inventory-page{% endblock %}
+
+{% block content %}
+  <section class="inventory-page">
+    <div class="page-heading"><p class="eyebrow">ACCOUNTABILITY</p><h1>Audit log</h1><p>Review recorded changes and activity.</p></div>
+    <section class="inventory-panel" aria-label="Audit log">
+      <form class="inventory-filters" action="{{ url_for('audit_log_page') }}" method="get">
+        <label class="filter-search"><span>Search audit log</span><input type="search" name="q" value="{{ search_text }}" placeholder="Search person, action, or item"></label>
+        <button class="button-primary" type="submit">Search log</button>
+        <a class="button-secondary" href="{{ url_for('audit_log_export', q=search_text) }}">Export CSV</a>
+      </form>
+      <div class="table-scroll"><table class="inventory-table">
+        <thead><tr><th scope="col">Time</th><th scope="col">Who</th><th scope="col">Role</th><th scope="col">Action</th><th scope="col">Item / target</th><th scope="col">Details</th></tr></thead>
+        <tbody>{% for entry in entries %}<tr><td>{{ entry.created_at }}</td><td>{{ entry.actor }}</td><td>{{ entry.role }}</td><td>{{ entry.action }}</td><td>{{ entry.target }}</td><td>{{ entry.detail }}</td></tr>
+          {% else %}<tr><td colspan="6" class="empty-results">No audit entries found.</td></tr>{% endfor %}</tbody>
+      </table></div>
+    </section>
+  </section>
+{% endblock %}

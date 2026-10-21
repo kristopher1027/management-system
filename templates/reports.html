@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Reports · ResourceHub{% endblock %}
+{% block page_class %}dashboard-page{% endblock %}
+
+{% block content %}
+  <section class="dashboard-page">
+    <div class="page-heading"><p class="eyebrow">REPORTING</p><h1>Sales and stock reports</h1><p>Review sales totals and the value of available inventory.</p></div>
+    <div class="not-found-actions">
+      <a class="button-primary" href="{{ url_for('reports_export') }}">Export CSV</a>
+      <a class="button-secondary" href="{{ url_for('reports_backup') }}">Download backup</a>
+    </div>
+    <section class="dashboard-stats" aria-label="Report totals">
+      <article class="dashboard-stat"><span>Total sales</span><strong>{{ '%.2f'|format(sales_total) }}</strong><small>Recorded sales value</small></article>
+      <article class="dashboard-stat"><span>Available units</span><strong>{{ summary.available_units }}</strong><small>Current stock</small></article>
+      <article class="dashboard-stat"><span>Stock value</span><strong>{{ '%.2f'|format(stock_value) }}</strong><small>Available units × unit price</small></article>
+      <article class="dashboard-stat"><span>Borrowed units</span><strong>{{ summary.borrowed_units }}</strong><small>Currently on loan</small></article>
+    </section>
+    <section class="inventory-panel" aria-label="Sales and stock by item">
+      <div class="table-scroll"><table class="inventory-table">
+        <thead><tr><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Units sold</th><th scope="col">Sales value</th><th scope="col">Available</th><th scope="col">Stock value</th></tr></thead>
+        <tbody>{% for item in sales %}<tr><td><strong>{{ item.name }}</strong><span class="resource-id">{{ item.id }}</span></td><td>{{ item.category }}</td><td>{{ item.units_sold }}</td><td>{{ '%.2f'|format(item.sales_total) }}</td><td>{{ item.available }}</td><td>{{ '%.2f'|format(item.available * item.price) }}</td></tr>
+          {% else %}<tr><td colspan="6" class="empty-results">No report data is available yet.</td></tr>{% endfor %}</tbody>
+      </table></div>
+    </section>
+  </section>
+{% endblock %}

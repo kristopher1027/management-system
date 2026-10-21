@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block title %}Access restricted · ResourceHub{% endblock %}
+{% block page_class %}not-found-page{% endblock %}
+
+{% block content %}
+  <section class="not-found-card" aria-labelledby="access-title">
+    <p class="eyebrow">ACCESS RESTRICTED</p>
+    <h1 id="access-title">This page is for admins.</h1>
+    <p>Your staff account can use the dashboard, inventory, transactions, and loans.</p>
+    <div class="not-found-actions"><a class="button-primary" href="{{ url_for('dashboard_page') }}">Return to dashboard</a></div>
+  </section>
+{% endblock %}

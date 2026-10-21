@@ -13,6 +13,24 @@
     </div>
 
     <section class="inventory-panel" aria-label="Resource inventory">
+      {% if notice %}<div class="notice {{ 'success' if 'Added' in notice else 'error' }}" role="status">{{ notice }}</div>{% endif %}
+      {% if session.get('role') == 'admin' %}
+        <details class="add-item-section">
+          <summary class="button-primary">＋ Add item</summary>
+          <form action="{{ url_for('add_item_page') }}" method="post" class="transaction-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label for="new-resource-id">Item ID</label><input id="new-resource-id" name="resource_id" required>
+            <label for="new-resource-name">Name</label><input id="new-resource-name" name="name" required>
+            <label for="new-resource-category">Category</label><input id="new-resource-category" name="category" required>
+            <label for="new-resource-total">Starting quantity</label><input id="new-resource-total" name="total" type="number" min="1" step="1" required>
+            <label for="new-resource-sku">SKU</label><input id="new-resource-sku" name="sku">
+            <label for="new-resource-price">Unit price</label><input id="new-resource-price" name="price" type="number" min="0" step="0.01" value="0">
+            <label for="new-resource-supplier">Supplier</label><input id="new-resource-supplier" name="supplier">
+            <label for="new-resource-reorder">Restock threshold</label><input id="new-resource-reorder" name="reorder_level" type="number" min="0" step="1" value="3">
+            <button class="button-primary" type="submit">Save item</button>
+          </form>
+        </details>
+      {% endif %}
       <form class="inventory-filters" action="{{ url_for('inventory_page') }}" method="get">
         <label class="filter-search">
           <span>Search by name</span>

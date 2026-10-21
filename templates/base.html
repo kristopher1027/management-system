@@ -9,14 +9,37 @@
 <body>
   <a class="skip-link" href="#main-content">Skip to main content</a>
   <header class="site-header">
-    <a class="brand" href="{{ url_for('home') }}">ResourceHub</a>
-    <nav aria-label="Main navigation">
-      <a class="nav-link {% if request.endpoint == 'home' %}active{% endif %}" href="{{ url_for('home') }}">Home</a>
-      <a class="nav-link {% if request.endpoint == 'inventory_page' %}active{% endif %}" href="{{ url_for('inventory_page') }}">Inventory</a>
-      <a class="nav-link {% if request.endpoint in ['borrow_route', 'return_route'] %}active{% endif %}" href="{{ url_for('borrow_route') }}">Borrow / Return</a>
-      <a class="nav-link {% if request.endpoint == 'dashboard_page' %}active{% endif %}" href="{{ url_for('dashboard_page') }}">Dashboard</a>
-    </nav>
-    <label class="theme-toggle"><input id="theme-toggle" type="checkbox"><span>Dark mode</span></label>
+    <a class="brand" href="{{ url_for('dashboard_page') }}">ResourceHub</a>
+    {% if session.get('username') %}
+      <details class="site-menu">
+        <summary class="menu-toggle" aria-label="Main navigation menu"><span aria-hidden="true">☰</span><span>Menu</span></summary>
+        <nav aria-label="Main navigation">
+          <a class="nav-link{% if request.endpoint == 'dashboard_page' %} active{% endif %}" href="{{ url_for('dashboard_page') }}"{% if request.endpoint == 'dashboard_page' %} aria-current="page"{% endif %}>Dashboard</a>
+          <a class="nav-link{% if request.endpoint in ['inventory_page', 'add_item_page'] %} active{% endif %}" href="{{ url_for('inventory_page') }}"{% if request.endpoint in ['inventory_page', 'add_item_page'] %} aria-current="page"{% endif %}>Inventory</a>
+          <a class="nav-link{% if request.endpoint in ['transactions_page', 'borrow_route', 'return_route'] %} active{% endif %}" href="{{ url_for('transactions_page') }}"{% if request.endpoint in ['transactions_page', 'borrow_route', 'return_route'] %} aria-current="page"{% endif %}>Transactions</a>
+          <a class="nav-link{% if request.endpoint == 'loans_page' %} active{% endif %}" href="{{ url_for('loans_page') }}"{% if request.endpoint == 'loans_page' %} aria-current="page"{% endif %}>Loans</a>
+          {% if session.get('role') == 'admin' %}
+            <a class="nav-link{% if request.endpoint in ['reports_page', 'reports_export', 'reports_backup'] %} active{% endif %}" href="{{ url_for('reports_page') }}"{% if request.endpoint in ['reports_page', 'reports_export', 'reports_backup'] %} aria-current="page"{% endif %}>Reports</a>
+            <a class="nav-link{% if request.endpoint in ['audit_log_page', 'audit_log_export'] %} active{% endif %}" href="{{ url_for('audit_log_page') }}"{% if request.endpoint in ['audit_log_page', 'audit_log_export'] %} aria-current="page"{% endif %}>Audit Log</a>
+          {% endif %}
+        </nav>
+      </details>
+      <div class="account-area">
+        <button class="user-menu-trigger" type="button" popovertarget="account-menu" aria-controls="account-menu" aria-label="Account options for {{ session.get('username') }}">
+          {{ session.get('username') }} <span aria-hidden="true">▾</span>
+        </button>
+        <div class="user-menu-panel" id="account-menu" popover="auto" aria-labelledby="account-menu-title">
+          <strong id="account-menu-title">{{ session.get('username') }} · {{ session.get('role')|title }}</strong>
+          <ul><li>Settings</li><li>Change password</li></ul>
+          <form action="{{ url_for('logout_page') }}" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button class="account-signout" type="submit">Sign out</button>
+          </form>
+        </div>
+      </div>
+    {% else %}
+      <a class="nav-link sign-in-link" href="{{ url_for('login_page') }}">Sign in</a>
+    {% endif %}
   </header>
 
   <main id="main-content" class="page-content {% block page_class %}{% endblock %}">

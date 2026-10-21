@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in · ResourceHub{% endblock %}
+
+{% block content %}
+  <section class="welcome-card login-card" aria-labelledby="login-title">
+    <p class="eyebrow">RESOURCEHUB ACCOUNT</p>
+    <h1 id="login-title">Sign in</h1>
+    {% if message %}<p class="notice error" role="alert">{{ message }}</p>{% endif %}
+    {% if not accounts_configured %}
+      <p class="notice error" role="status">No Flask accounts are configured yet. Add admin or staff credentials to your private .env file.</p>
+    {% endif %}
+    <form action="{{ url_for('login_page') }}" method="post" class="transaction-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ next_path }}">
+      <label for="login-username">Username</label>
+      <input id="login-username" name="username" autocomplete="username" required>
+      <label for="login-password">Password</label>
+      <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+      <button class="button-primary" type="submit">Sign in</button>
+    </form>
+  </section>
+{% endblock %}
