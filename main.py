@@ -100,6 +100,13 @@ def init_db(seed_defaults=True):
               movement_type TEXT NOT NULL DEFAULT 'restock',
               created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
             CREATE INDEX IF NOT EXISTS stock_movement_resource ON stock_movements(resource_id);
+            CREATE TABLE IF NOT EXISTS stock_adjustments (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              resource_id TEXT NOT NULL REFERENCES resources(id),
+              quantity INTEGER NOT NULL CHECK(quantity != 0),
+              note TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+            CREATE INDEX IF NOT EXISTS stock_adjustment_resource ON stock_adjustments(resource_id);
             CREATE TABLE IF NOT EXISTS expenses (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               category TEXT NOT NULL,
@@ -215,6 +222,7 @@ def init_db(seed_defaults=True):
                                 valid = False
                                 break
                 if valid:
+                    db.execute("DELETE FROM stock_adjustments")
                     db.execute("DELETE FROM resources")
                     db.executemany("INSERT INTO resources(id,name,category,total) VALUES(?,?,?,?)", [(r["id"], r["name"], r["category"], r["total"]) for r in saved_resources])
                     borrow_ids = {}
@@ -294,7 +302,8 @@ def refresh_state():
         rows = db.execute("""SELECT r.*, r.total - COALESCE((SELECT SUM(l.quantity) FROM loans l
           WHERE l.resource_id=r.id AND l.type='borrow'),0) + COALESCE((SELECT SUM(l.quantity)
           FROM loans l WHERE l.resource_id=r.id AND l.type='return'),0) - COALESCE((SELECT SUM(s.quantity)
-          FROM sales s WHERE s.resource_id=r.id),0) AS available
+          FROM sales s WHERE s.resource_id=r.id),0) + COALESCE((SELECT SUM(a.quantity)
+          FROM stock_adjustments a WHERE a.resource_id=r.id),0) AS available
           FROM resources r ORDER BY r.id""").fetchall()
         resources[:] = [dict(row) for row in rows]
         fellows.clear()
@@ -305,6 +314,70 @@ def refresh_state():
 def save_data():
     """Compatibility hook; SQLite commits every operation directly."""
     refresh_state()
+
+
+def _available_quantity(db, resource_id, total):
+    loan_balance = db.execute("""SELECT COALESCE(SUM(CASE
+      WHEN type='borrow' THEN quantity WHEN type='return' THEN -quantity ELSE 0 END),0)
+      FROM loans WHERE resource_id=?""", (resource_id,)).fetchone()[0]
+    sold = db.execute("SELECT COALESCE(SUM(quantity),0) FROM sales WHERE resource_id=?",
+                      (resource_id,)).fetchone()[0]
+    adjusted = db.execute("SELECT COALESCE(SUM(quantity),0) FROM stock_adjustments WHERE resource_id=?",
+                          (resource_id,)).fetchone()[0]
+    return total - loan_balance - sold + adjusted
+
+
+def apply_stocktake(counts, note):
+    """Reconcile counted on-shelf stock to available units, keeping a signed ledger."""
+    if not isinstance(counts, list) or not counts or len(counts) > 500:
+        return False, "Count at least one item before saving the stocktake.", []
+    if not isinstance(note, str) or not note.strip() or len(note.strip()) > 200:
+        return False, "Add a stocktake note of 1 to 200 characters.", []
+
+    normalized = []
+    seen = set()
+    for entry in counts:
+        if not isinstance(entry, dict) or not isinstance(entry.get("resource_id"), str):
+            return False, "Each stocktake row needs a valid item ID.", []
+        rid = entry["resource_id"].strip().upper()
+        expected, counted = entry.get("expected"), entry.get("counted")
+        if (not rid or type(expected) is not int
+                or type(counted) is not int or counted < 0):
+            return False, "Counted quantities must be non-negative whole numbers.", []
+        if rid in seen:
+            return False, "An item can appear only once in a stocktake.", []
+        seen.add(rid)
+        normalized.append((rid, expected, counted))
+
+    backup_database()
+    changes = []
+    stocktake_note = note.strip()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        rows = []
+        for rid, expected, counted in normalized:
+            resource = db.execute("SELECT id,name,total FROM resources WHERE id=?", (rid,)).fetchone()
+            if not resource:
+                return False, f"Unknown item ID: {rid}", []
+            current = _available_quantity(db, rid, resource["total"])
+            if current != expected:
+                return False, (f"Inventory changed for {resource['name']} while the stocktake was open. "
+                               "Refresh and recount before saving."), []
+            rows.append((resource, expected, counted))
+
+        now = current_timestamp()
+        for resource, expected, counted in rows:
+            delta = counted - expected
+            if delta:
+                db.execute("""INSERT INTO stock_adjustments(resource_id,quantity,note,created_at)
+                    VALUES(?,?,?,?)""", (resource["id"], delta, stocktake_note, now))
+                changes.append({"resource_id": resource["id"], "name": resource["name"],
+                                "expected": expected, "counted": counted, "delta": delta})
+
+    refresh_state()
+    if changes:
+        return True, f"Stocktake saved with adjustments for {len(changes)} item(s).", changes
+    return True, "Stocktake saved. No stock adjustments were needed.", changes
 
 
 def load_data():
@@ -403,13 +476,16 @@ def delete_resource(resource_id):
         if not resource:
             return False, f"Unknown resource ID: {rid}"
         has_history = db.execute(
-            "SELECT EXISTS(SELECT 1 FROM loans WHERE resource_id=?) OR EXISTS(SELECT 1 FROM sales WHERE resource_id=?)",
-            (rid, rid),
+            "SELECT EXISTS(SELECT 1 FROM loans WHERE resource_id=?) "
+            "OR EXISTS(SELECT 1 FROM sales WHERE resource_id=?) "
+            "OR EXISTS(SELECT 1 FROM stock_adjustments WHERE resource_id=?)",
+            (rid, rid, rid),
         ).fetchone()[0]
         if has_history:
-            return False, "This product has loan or sales history and cannot be deleted."
+            return False, "This product has loan, sales, or stocktake history and cannot be deleted."
         backup_database()
         db.execute("DELETE FROM stock_movements WHERE resource_id=?", (rid,))
+        db.execute("DELETE FROM stock_adjustments WHERE resource_id=?", (rid,))
         db.execute("DELETE FROM resources WHERE id=?", (rid,))
     refresh_state()
     return True, f"Deleted {resource['name']} ({rid})."
@@ -447,11 +523,7 @@ def record_sale(resource_id, quantity, customer=""):
         resource = db.execute("SELECT name,total,price,cost_price FROM resources WHERE id=?", (rid,)).fetchone()
         if not resource:
             return False, f"Unknown resource ID: {rid}"
-        loan_balance = db.execute("""SELECT COALESCE(SUM(CASE
-          WHEN type IN ('borrow','damaged') THEN quantity WHEN type='return' THEN -quantity ELSE 0 END),0)
-          FROM loans WHERE resource_id=?""", (rid,)).fetchone()[0]
-        sold = db.execute("SELECT COALESCE(SUM(quantity),0) FROM sales WHERE resource_id=?", (rid,)).fetchone()[0]
-        available = resource["total"] - loan_balance - sold
+        available = _available_quantity(db, rid, resource["total"])
         if quantity > available:
             return False, f"Only {available} unit(s) of {resource['name']} remain in stock; you asked for {quantity}."
         unit_cost = resource["cost_price"] if resource["cost_price"] > 0 else None
@@ -485,11 +557,7 @@ def record_credit_sale(customer_id, resource_id, quantity, amount_paid):
         resource = db.execute("SELECT name,total,price,cost_price FROM resources WHERE id=?", (rid,)).fetchone()
         if not resource:
             return False, f"Unknown item ID: {rid}"
-        loan_balance = db.execute("""SELECT COALESCE(SUM(CASE
-          WHEN type IN ('borrow','damaged') THEN quantity WHEN type='return' THEN -quantity ELSE 0 END),0)
-          FROM loans WHERE resource_id=?""", (rid,)).fetchone()[0]
-        sold = db.execute("SELECT COALESCE(SUM(quantity),0) FROM sales WHERE resource_id=?", (rid,)).fetchone()[0]
-        available = resource["total"] - loan_balance - sold
+        available = _available_quantity(db, rid, resource["total"])
         if quantity > available:
             return False, f"Only {available} unit(s) of {resource['name']} remain in stock; you asked for {quantity}."
 
@@ -668,11 +736,7 @@ def borrow(fellow_id, resource_id, quantity, due_date=None):
         resource = db.execute("SELECT name,total FROM resources WHERE id=?", (rid,)).fetchone()
         if not resource:
             return False, f"Unknown resource ID: {rid}"
-        available = resource["total"] - db.execute("""SELECT COALESCE(SUM(CASE
-          WHEN type IN ('borrow','damaged') THEN quantity WHEN type='return' THEN -quantity ELSE 0 END),0)
-          FROM loans WHERE resource_id=?""", (rid,)).fetchone()[0] - db.execute(
-            "SELECT COALESCE(SUM(quantity),0) FROM sales WHERE resource_id=?", (rid,)
-        ).fetchone()[0]
+        available = _available_quantity(db, rid, resource["total"])
         if quantity > available:
             return False, (f"Only {available} unit(s) of {resource['name']} available; you asked for {quantity}.")
         db.execute("""INSERT INTO loans
@@ -683,12 +747,43 @@ def borrow(fellow_id, resource_id, quantity, due_date=None):
     return True, f"{fellow['name']} borrowed {quantity} x {resource['name']} (due {due.isoformat()})."
 
 
-def return_item(fellow_id, resource_id, quantity, damaged=False):
+def update_loan_due_date(loan_id, due_date):
+    if type(loan_id) is not int or loan_id <= 0:
+        return False, "Loan ID must be a positive whole number."
+    try:
+        due = date.fromisoformat(due_date)
+    except (TypeError, ValueError):
+        return False, "Due date must be a valid date in YYYY-MM-DD format."
+    if due < date.today():
+        return False, "Due date cannot be in the past."
+    backup_database()
+    with connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        loan = db.execute("""SELECT b.id,b.fellow_id,f.name AS fellow_name,b.resource_id,
+            r.name AS resource_name,b.due_date,
+            b.quantity-COALESCE(SUM(ret.quantity),0) AS outstanding_quantity
+            FROM loans b JOIN fellows f ON f.id=b.fellow_id
+            JOIN resources r ON r.id=b.resource_id
+            LEFT JOIN loans ret ON ret.loan_id=b.id AND ret.type IN ('return','damaged')
+            WHERE b.id=? AND b.type='borrow' GROUP BY b.id
+            HAVING outstanding_quantity>0""", (loan_id,)).fetchone()
+        if not loan:
+            return False, "That loan is no longer outstanding. Refresh the page and try again."
+        previous_due = loan["due_date"] or "not set"
+        db.execute("UPDATE loans SET due_date=? WHERE id=? AND type='borrow'", (due.isoformat(), loan_id))
+    refresh_state()
+    return True, (f"Due date for {loan['fellow_name']}'s {loan['resource_name']} updated "
+                  f"from {previous_due} to {due.isoformat()}.")
+
+
+def return_item(fellow_id, resource_id, quantity, damaged=False, loan_id=None):
     fid, rid = fellow_id.strip().upper(), resource_id.strip().upper()
     if type(quantity) is not int or quantity <= 0:
         return False, "Quantity must be a positive whole number."
     if type(damaged) is not bool:
         return False, "Damaged status must be yes or no."
+    if loan_id is not None and (type(loan_id) is not int or loan_id <= 0):
+        return False, "Loan ID must be a positive whole number."
     backup_database()
     with connect() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -704,8 +799,14 @@ def return_item(fellow_id, resource_id, quantity, damaged=False):
         # Allocate returns against the oldest open borrow records; partial returns retain their original due date.
         open_loans = db.execute("""SELECT b.id,b.quantity-COALESCE(SUM(r.quantity),0) AS remaining
           FROM loans b LEFT JOIN loans r ON r.loan_id=b.id AND r.type IN ('return','damaged')
-          WHERE b.type='borrow' AND b.fellow_id=? AND b.resource_id=? GROUP BY b.id
-          HAVING remaining>0 ORDER BY b.id""", (fid, rid)).fetchall()
+          WHERE b.type='borrow' AND b.fellow_id=? AND b.resource_id=?
+            AND (? IS NULL OR b.id=?) GROUP BY b.id
+          HAVING remaining>0 ORDER BY b.id""", (fid, rid, loan_id, loan_id)).fetchall()
+        if not open_loans:
+            return False, "That loan is no longer outstanding. Refresh the page and try again."
+        if loan_id is not None and quantity > open_loans[0]["remaining"]:
+            remaining_in_loan = open_loans[0]["remaining"]
+            return False, f"That loan has only {remaining_in_loan} unit(s) outstanding; you asked to return {quantity}."
         remaining = quantity
         for loan in open_loans:
             returned = min(remaining, loan["remaining"])
