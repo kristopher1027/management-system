@@ -1092,6 +1092,34 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(401, {"error": "Please sign in to continue."})
                     return
                 self.respond(200, snapshot())
+        elif path == "/api/assets":
+            with LOCK:
+                username = self.current_user()
+                if not username:
+                    self.respond(401, {"error": "Please sign in to continue."})
+                    return
+                query = parse_qs(urlparse(self.path).query)
+                try:
+                    assets = inventory.list_asset_passports(query.get("q", [""])[0][:120])
+                except ValueError as error:
+                    self.respond(400, {"error": str(error)})
+                    return
+                self.respond(200, {"assets": assets})
+        elif path == "/api/asset":
+            with LOCK:
+                if not self.current_user():
+                    self.respond(401, {"error": "Please sign in to continue."})
+                    return
+                tag = parse_qs(urlparse(self.path).query).get("tag", [""])[0]
+                try:
+                    asset = inventory.get_asset_passport(tag)
+                except ValueError as error:
+                    self.respond(400, {"error": str(error)})
+                    return
+                if asset is None:
+                    self.respond(404, {"error": "Asset passport not found."})
+                    return
+                self.respond(200, {"asset": asset})
         elif path == "/api/history":
             with LOCK:
                 if not self.current_user():
@@ -1295,10 +1323,63 @@ class Handler(BaseHTTPRequestHandler):
 
         return parsed_origin.netloc.lower() == expected_host
 
+    def handle_asset_passport_post(self, path):
+        try:
+            data = self.read_json(max_bytes=16_384)
+            with LOCK:
+                username = self.current_user()
+                if not username:
+                    self.respond(401, {"error": "Your session expired. Please sign in again."})
+                    return
+                if users[username]["role"] != "owner":
+                    self.respond(403, {"error": "Only the owner can manage asset passports."})
+                    return
+                if path == "/api/assets":
+                    fields = ("resource_id", "serial_number", "location", "condition", "notes")
+                    if any(not isinstance(data.get(key, ""), str) for key in fields):
+                        raise ValueError("Asset passport fields must be text.")
+                    success, message, asset = inventory.create_asset_passport(
+                        data.get("resource_id", ""), data.get("serial_number", ""),
+                        data.get("location", ""), data.get("condition", "good"),
+                        data.get("notes", ""), actor=username,
+                    )
+                    if not success:
+                        self.respond(400, {"error": message})
+                        return
+                    audit_log(self, username, "asset_created", asset["asset_tag"], message)
+                    self.respond(201, {"message": message, "asset": asset})
+                    return
+                fields = ("asset_tag", "location", "condition", "status", "notes")
+                if not isinstance(data.get("asset_tag"), str):
+                    raise ValueError("Asset tag is required.")
+                if any(key in data and not isinstance(data[key], str) for key in fields[1:]):
+                    raise ValueError("Asset passport fields must be text.")
+                success, message = inventory.update_asset_passport(
+                    data["asset_tag"],
+                    condition=data.get("condition"),
+                    location=data.get("location"),
+                    status=data.get("status"),
+                    notes=data.get("notes"),
+                    actor=username,
+                )
+                if not success:
+                    self.respond(400, {"error": message})
+                    return
+                audit_log(self, username, "asset_updated", data["asset_tag"], message)
+                self.respond(200, {"message": message})
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
+        except (OSError, sqlite3.Error) as error:
+            print(f"Asset passport action {path} failed: {error!r}", flush=True)
+            self.respond(500, {"error": "Could not complete this asset passport change."})
+
     def do_POST(self):
         path = urlparse(self.path).path
         if not self.is_same_origin_request():
             self.respond(403, {"error": "Request origin validation failed."})
+            return
+        if path in ("/api/assets", "/api/assets/update"):
+            self.handle_asset_passport_post(path)
             return
         if path == "/api/send-verification":
             self.handle_email_verification()
