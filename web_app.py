@@ -712,7 +712,20 @@ dialog::backdrop{background:color-mix(in srgb,var(--ink) 52%,transparent);backdr
   <dialog id="addDialog"><form id="addForm"><h2 style="margin:0 0 5px">Add shop item</h2><p class="subtle" style="margin:0 0 16px">Create a product and add its starting stock.</p><div class="field"><label for="newId">Item ID</label><input id="newId" placeholder="e.g. P004" required></div><div class="field"><label for="newName">Product name</label><input id="newName" placeholder="e.g. Headphones" required></div><div class="field"><label for="newCategory">Category</label><input id="newCategory" placeholder="e.g. Electronics" required></div><div class="field"><label for="newTotal">Starting stock</label><input id="newTotal" type="number" min="1" step="1" value="1" required></div><div class="field"><label for="newSku">SKU / barcode</label><input id="newSku" maxlength="80"></div><div class="field"><label for="newPrice">Unit price</label><input id="newPrice" type="number" min="0" step="0.01" value="0" required></div><div class="field"><label for="newSupplier">Supplier</label><input id="newSupplier" maxlength="100"></div><div class="field"><label for="newThreshold">Restock alert at</label><input id="newThreshold" type="number" min="0" step="1" value="3" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelAdd">Cancel</button><button class="btn" type="submit">Add item</button></div><div id="addMessage" class="form-message" role="status"></div></form></dialog>
   <dialog id="detailsDialog"><form id="detailsForm"><h2 style="margin:0 0 5px">Product details</h2><p class="subtle" id="detailsItemName" style="margin:0 0 16px"></p><input id="detailsId" type="hidden"><div class="field"><label for="detailsSku">SKU / barcode</label><input id="detailsSku" maxlength="80"></div><div class="field"><label for="detailsPrice">Unit price</label><input id="detailsPrice" type="number" min="0" step="0.01" required></div><div class="field"><label for="detailsSupplier">Supplier</label><input id="detailsSupplier" maxlength="100"></div><div class="field"><label for="detailsThreshold">Restock alert at</label><input id="detailsThreshold" type="number" min="0" step="1" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelDetails">Cancel</button><button class="btn" type="submit">Save details</button></div><div id="detailsMessage" class="form-message" role="status"></div></form></dialog>
     <dialog id="assetCreateDialog"><form id="assetCreateForm"><h2 style="margin:0 0 5px">Register an individual asset</h2><p class="subtle" style="margin:0 0 16px">This creates a passport for one physical item and does not change inventory quantities.</p><div class="field"><label for="assetResource">Inventory item</label><select id="assetResource" required></select></div><div class="field"><label for="assetSerial">Serial number</label><input id="assetSerial" maxlength="120"></div><div class="field"><label for="assetLocation">Current location</label><input id="assetLocation" maxlength="120" placeholder="e.g. Lagos office · Room 2"></div><div class="field"><label for="assetCondition">Condition</label><select id="assetCondition"><option value="good">Good</option><option value="fair">Fair</option><option value="poor">Poor</option><option value="damaged">Damaged</option></select></div><div class="field"><label for="assetNotes">Notes</label><textarea id="assetNotes" maxlength="1000" rows="3"></textarea></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelAssetCreate">Cancel</button><button class="btn" type="submit">Create passport</button></div><div id="assetCreateMessage" class="form-message" role="status"></div></form></dialog>
-  <dialog id="assetDetailDialog"><form id="assetDetailForm"><h2 id="assetDetailTitle" style="margin:0 0 5px">Asset passport</h2><p class="subtle" id="assetDetailSubtitle" style="margin:0 0 16px"></p><input id="assetDetailTag" type="hidden"><div class="field"><label for="assetDetailLocation">Location</label><input id="assetDetailLocation" maxlength="120" required></div><div class="field"><label for="assetDetailCondition">Condition</label><select id="assetDetailCondition"><option value="good">Good</option><option value="fair">Fair</option><option value="poor">Poor</option><option value="damaged">Damaged</option></select></div><div class="field"><label for="assetDetailStatus">Status</label><select id="assetDetailStatus"><option value="available">Available</option><option value="assigned">Assigned</option><option value="maintenance">Maintenance</option><option value="retired">Retired</option></select></div><div class="field"><label for="assetDetailNotes">Notes</label><textarea id="assetDetailNotes" maxlength="1000" rows="2"></textarea></div><h3 style="margin:18px 0 8px">History</h3><div class="table-wrap" style="max-height:32vh"><table><thead><tr><th>When</th><th>Event</th><th>Details</th><th>By</th></tr></thead><tbody id="assetEventRows"></tbody></table></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelAssetDetail">Close</button><button class="btn" id="saveAssetDetail" type="submit">Save changes</button></div><div id="assetDetailMessage" class="form-message" role="status"></div></form></dialog>
+  <dialog id="assetDetailDialog"><form id="assetDetailForm"><h2 id="assetDetailTitle" style="margin:0 0 5px">Asset passport</h2><p class="subtle" id="assetDetailSubtitle" style="margin:0 0 16px"></p><input id="assetDetailTag" type="hidden"><div class="field"><label for="assetDetailLocation">Location</label><input id="assetDetailLocation" maxlength="120" required></div><div class="field"><label for="assetDetailCondition">Condition</label><select id="assetDetailCondition"><option value="good">Good</option><option value="fair">Fair</option><option value="poor">Poor</option><option value="damaged">Damaged</option></select></div><div class="field"><label for="assetDetailStatus">Status</label><select id="assetDetailStatus"><option value="available">Available</option><option value="assigned">Assigned</option><option value="maintenance">Maintenance</option><option value="retired">Retired</option></select></div><div class="field"><label for="assetDetailNotes">Notes</label><textarea id="assetDetailNotes" maxlength="1000" rows="2"></textarea></div><h3 style="margin:18px 0 8px">Asset history</h3><div class="table-wrap" style="max-height:24vh"><table><thead><tr><th>When</th><th>Event</th><th>Details</th><th>By</th></tr></thead><tbody id="assetEventRows"></tbody></table></div>
+<h3 style="margin:20px 0 8px">Maintenance &amp; repairs</h3>
+<p class="subtle" style="margin:0 0 12px">Record repairs for this individual asset. Maintenance records do not change stock quantities.</p>
+<div id="maintenanceCreatePanel">
+  <div class="field"><label for="maintenanceProblem">Reported problem</label><textarea id="maintenanceProblem" maxlength="1000" rows="2" required placeholder="Describe the fault or damage"></textarea></div>
+  <div class="field"><label for="maintenanceAction">Action taken</label><textarea id="maintenanceAction" maxlength="1000" rows="2" placeholder="Describe the repair or inspection"></textarea></div>
+  <div class="field"><label for="maintenanceCost">Repair cost</label><input id="maintenanceCost" type="number" min="0" step="0.01" value="0" required></div>
+  <div class="field"><label for="maintenanceTechnician">Technician</label><input id="maintenanceTechnician" maxlength="120" placeholder="Technician or service provider"></div>
+  <div class="field"><label for="maintenanceStatus">Status</label><select id="maintenanceStatus"><option value="open">Open</option><option value="in_progress">In progress</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></div>
+  <button class="btn" id="createMaintenanceButton" type="button">Record maintenance</button>
+</div>
+<div id="maintenanceMessage" class="form-message" role="status"></div>
+<div class="table-wrap" style="max-height:36vh;margin-top:12px"><table><thead><tr><th>Reported</th><th>Problem / action</th><th>Cost</th><th>Technician</th><th>Status</th><th>Manage</th></tr></thead><tbody id="maintenanceRows"><tr><td colspan="6" class="empty">Loading maintenance records…</td></tr></tbody></table></div>
+<div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelAssetDetail">Close</button><button class="btn" id="saveAssetDetail" type="submit">Save changes</button></div><div id="assetDetailMessage" class="form-message" role="status"></div></form></dialog>
   <dialog id="stocktakeDialog"><form id="stocktakeForm"><h2 style="margin:0 0 5px">Stocktake</h2><p class="subtle" style="margin:0 0 14px">Count units currently on the shelf. Items out on loan are excluded. Leave uncounted items blank; enter 0 if none are present.</p><div class="table-wrap" style="max-height:48vh"><table><thead><tr><th>Item</th><th>Expected on shelf</th><th>Counted on shelf</th></tr></thead><tbody id="stocktakeRows"></tbody></table></div><div class="field" style="margin-top:14px"><label for="stocktakeNote">Stocktake note</label><input id="stocktakeNote" maxlength="200" placeholder="e.g. Monthly count" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelStocktake">Cancel</button><button class="btn" type="submit">Review adjustments</button></div><div id="stocktakeMessage" class="form-message" role="status"></div></form></dialog>
 <dialog id="restockDialog"><form id="restockForm"><h2 style="margin:0 0 5px">Stock in items</h2><p class="subtle" style="margin:0 0 16px">Record newly received units and update remaining stock.</p><div class="field"><label for="restockItem">Shop item</label><select id="restockItem" required></select></div><div class="field"><label for="restockQuantity">Quantity received</label><input id="restockQuantity" type="number" min="1" step="1" value="1" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="cancelRestock">Cancel</button><button class="btn" type="submit">Update stock</button></div><div id="restockMessage" class="form-message" role="status"></div></form></dialog>
   <dialog id="staffDialog"><h2 style="margin:0 0 5px">Staff accounts</h2><p class="subtle" style="margin:0 0 16px">Create staff logins for sales, loans, and returns.</p><div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Manage</th></tr></thead><tbody id="staffRows"></tbody></table></div><form id="staffForm" style="margin-top:22px"><h3 style="font-size:14px">Add staff member</h3><div class="field"><label for="staffName">Name</label><input id="staffName" maxlength="80" required></div><div class="field"><label for="staffUsername">Username</label><input id="staffUsername" minlength="3" maxlength="40" required></div><div class="field"><label for="staffPassword">Initial password</label><input id="staffPassword" type="password" minlength="10" autocomplete="new-password" required></div><div style="display:flex;gap:9px;justify-content:flex-end;margin-top:18px"><button type="button" class="btn secondary" id="closeStaff">Close</button><button class="btn" type="submit">Create staff account</button></div><div id="staffMessage" class="form-message" role="status"></div></form></dialog>
@@ -826,6 +839,77 @@ dialog::backdrop{background:color-mix(in srgb,var(--ink) 52%,transparent);backdr
       const url = '/api/asset-label?tag=' + encodeURIComponent(button.dataset.tag);
       window.open(url, '_blank', 'noopener');
     });
+    async function loadMaintenanceRecords(tag){
+      const rows=$('#maintenanceRows'),message=$('#maintenanceMessage'),owner=currentRole==='owner';
+      try{
+        const result=await api('/api/maintenance?tag='+encodeURIComponent(tag));
+        const records=result.records||[];
+        rows.innerHTML=records.length?records.map(record=>{
+          const reported=record.reported_at?new Date(record.reported_at+'Z').toLocaleString():'—';
+          const cost=money(record.cost||0);
+          const statuses=[['open','Open'],['in_progress','In progress'],['completed','Completed'],['cancelled','Cancelled']];
+          const statusLabel=(statuses.find(item=>item[0]===record.status)||[record.status,record.status])[1];
+          return `<tr>
+            <td>${esc(reported)}<div class="subtle">#${Number(record.id)}</div></td>
+            <td><strong>${esc(record.problem)}</strong><div class="field" style="margin-top:6px"><label for="maintenanceAction-${Number(record.id)}">Action taken</label><textarea id="maintenanceAction-${Number(record.id)}" data-maintenance-action maxlength="1000" rows="2" ${owner?'':'disabled'}>${esc(record.action_taken||'')}</textarea></div></td>
+            <td><input aria-label="Repair cost" data-maintenance-cost type="number" min="0" step="0.01" value="${esc(record.cost??0)}" ${owner?'':'disabled'} style="min-width:90px"></td>
+            <td><input aria-label="Technician" data-maintenance-technician maxlength="120" value="${esc(record.technician||'')}" ${owner?'':'disabled'} style="min-width:110px"></td>
+            <td>${owner?`<select aria-label="Maintenance status" data-maintenance-status>${statuses.map(item=>`<option value="${item[0]}" ${record.status===item[0]?'selected':''}>${item[1]}</option>`).join('')}</select>`:esc(statusLabel)}${record.completed_at?`<div class="subtle">Completed: ${esc(new Date(record.completed_at+'Z').toLocaleDateString())}</div>`:''}</td>
+            <td>${owner?`<button class="btn secondary save-maintenance" type="button" data-id="${Number(record.id)}">Save</button>`:'View only'}</td>
+          </tr>`;
+        }).join(''):'<tr><td colspan="6" class="empty">No maintenance records for this asset yet.</td></tr>';
+        $('#maintenanceCreatePanel').hidden=!owner;
+        message.className='form-message';message.textContent='';
+      }catch(error){
+        rows.innerHTML='<tr><td colspan="6" class="empty">Could not load maintenance records.</td></tr>';
+        message.className='form-message error';message.textContent=error.message;
+      }
+    }
+
+    $('#createMaintenanceButton').addEventListener('click',async()=>{
+      if(currentRole!=='owner')return;
+      const message=$('#maintenanceMessage');message.className='form-message';message.textContent='';
+      const problem=$('#maintenanceProblem').value.trim();
+      if(!problem){message.classList.add('error');message.textContent='Enter the reported problem.';$('#maintenanceProblem').focus();return}
+      try{
+        const result=await api('/api/maintenance',{
+          asset_tag:$('#assetDetailTag').value,
+          problem,
+          action_taken:$('#maintenanceAction').value.trim(),
+          cost:$('#maintenanceCost').value,
+          technician:$('#maintenanceTechnician').value.trim(),
+          status:$('#maintenanceStatus').value
+        });
+        message.textContent=result.message||'Maintenance record created.';
+        $('#maintenanceProblem').value='';
+        $('#maintenanceAction').value='';
+        $('#maintenanceCost').value='0';
+        $('#maintenanceTechnician').value='';
+        $('#maintenanceStatus').value='open';
+        await loadMaintenanceRecords($('#assetDetailTag').value);
+        showToast('Maintenance record created.');
+      }catch(error){message.className='form-message error';message.textContent=error.message}
+    });
+
+    $('#maintenanceRows').addEventListener('click',async event=>{
+      const button=event.target.closest('.save-maintenance');
+      if(!button||currentRole!=='owner')return;
+      const row=button.closest('tr'),id=Number(button.dataset.id),message=$('#maintenanceMessage');
+      message.className='form-message';message.textContent='';
+      try{
+        const result=await api('/api/maintenance/update',{
+          id,
+          action_taken:row.querySelector('[data-maintenance-action]').value.trim(),
+          cost:row.querySelector('[data-maintenance-cost]').value,
+          technician:row.querySelector('[data-maintenance-technician]').value.trim(),
+          status:row.querySelector('[data-maintenance-status]').value
+        });
+        message.textContent=result.message||'Maintenance record updated.';
+        await loadMaintenanceRecords($('#assetDetailTag').value);
+        showToast('Maintenance record updated.');
+      }catch(error){message.className='form-message error';message.textContent=error.message}
+    });
+
     $('#assetRows').addEventListener('click',async event=>{
       const button=event.target.closest('.asset-history');if(!button)return;
       try{
@@ -834,6 +918,7 @@ dialog::backdrop{background:color-mix(in srgb,var(--ink) 52%,transparent);backdr
         $('#assetDetailSubtitle').textContent=`${asset.resource_name} (${asset.resource_id}) · Serial: ${asset.serial_number||'not recorded'}`;
         $('#assetDetailLocation').value=asset.location;$('#assetDetailCondition').value=asset.condition;$('#assetDetailStatus').value=asset.status;$('#assetDetailNotes').value=asset.notes;
         $('#assetEventRows').innerHTML=asset.events.length?asset.events.map(row=>`<tr><td>${esc(new Date(row.created_at+'Z').toLocaleString())}</td><td>${esc(row.event_type)}</td><td>${esc(row.detail)}</td><td>${esc(row.actor||'—')}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">No history recorded.</td></tr>';
+        await loadMaintenanceRecords(asset.asset_tag);
         $('#assetDetailMessage').className='form-message';$('#assetDetailMessage').textContent='';
         const owner=currentRole==='owner';['assetDetailLocation','assetDetailCondition','assetDetailStatus','assetDetailNotes','saveAssetDetail'].forEach(id=>$('#'+id).disabled=!owner);
         $('#assetDetailDialog').showModal();
@@ -1222,6 +1307,22 @@ img{{width:180px;height:180px;display:block;margin:12px auto}}
                     self.respond(400, {"error": str(error)})
                     return
                 self.respond(200, {"assets": assets})
+        elif path == "/api/maintenance":
+            with LOCK:
+                if not self.current_user():
+                    self.respond(401, {"error": "Please sign in to continue."})
+                    return
+                query = parse_qs(urlparse(self.path).query)
+                tag = query.get("tag", [None])[0]
+                status = query.get("status", [None])[0]
+                try:
+                    records = inventory.list_maintenance_records(
+                        asset_tag=tag, status=status
+                    )
+                except ValueError as error:
+                    self.respond(400, {"error": str(error)})
+                    return
+                self.respond(200, {"records": records})
         elif path == "/api/asset":
             with LOCK:
                 if not self.current_user():
@@ -1490,10 +1591,72 @@ img{{width:180px;height:180px;display:block;margin:12px auto}}
             print(f"Asset passport action {path} failed: {error!r}", flush=True)
             self.respond(500, {"error": "Could not complete this asset passport change."})
 
+    def handle_maintenance_post(self, path):
+        try:
+            data = self.read_json(max_bytes=16_384)
+            with LOCK:
+                username = self.current_user()
+                if not username:
+                    self.respond(401, {"error": "Your session expired. Please sign in again."})
+                    return
+                if users[username]["role"] != "owner":
+                    self.respond(403, {"error": "Only the owner can manage maintenance records."})
+                    return
+
+                if path == "/api/maintenance":
+                    text_fields = ("asset_tag", "problem", "action_taken", "technician", "status")
+                    for field in text_fields:
+                        if field in data and not isinstance(data[field], str):
+                            raise ValueError(f"{field.replace('_', ' ').capitalize()} must be text.")
+                    success, message, record = inventory.create_maintenance_record(
+                        data.get("asset_tag", ""),
+                        data.get("problem", ""),
+                        action_taken=data.get("action_taken", ""),
+                        cost=data.get("cost", 0),
+                        technician=data.get("technician", ""),
+                        status=data.get("status", "open"),
+                        reported_by=username,
+                    )
+                    if not success:
+                        self.respond(400, {"error": message})
+                        return
+                    audit_log(self, username, "maintenance_created",
+                              record["asset_tag"], message)
+                    self.respond(201, {"message": message, "record": record})
+                    return
+
+                if "id" not in data:
+                    raise ValueError("Maintenance record ID is required.")
+                text_fields = ("action_taken", "technician", "status")
+                for field in text_fields:
+                    if field in data and not isinstance(data[field], str):
+                        raise ValueError(f"{field.replace('_', ' ').capitalize()} must be text.")
+                success, message = inventory.update_maintenance_record(
+                    data["id"],
+                    action_taken=data.get("action_taken"),
+                    cost=data.get("cost"),
+                    technician=data.get("technician"),
+                    status=data.get("status"),
+                )
+                if not success:
+                    self.respond(400, {"error": message})
+                    return
+                audit_log(self, username, "maintenance_updated",
+                          str(data["id"]), message)
+                self.respond(200, {"message": message})
+        except ValueError as error:
+            self.respond(400, {"error": str(error)})
+        except (OSError, sqlite3.Error) as error:
+            print(f"Maintenance action {path} failed: {error!r}", flush=True)
+            self.respond(500, {"error": "Could not complete this maintenance action."})
+
     def do_POST(self):
         path = urlparse(self.path).path
         if not self.is_same_origin_request():
             self.respond(403, {"error": "Request origin validation failed."})
+            return
+        if path in ("/api/maintenance", "/api/maintenance/update"):
+            self.handle_maintenance_post(path)
             return
         if path in ("/api/assets", "/api/assets/update"):
             self.handle_asset_passport_post(path)
