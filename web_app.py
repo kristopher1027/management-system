@@ -1152,7 +1152,6 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self.respond(200, snapshot())
         elif path in ("/api/assets/qr", "/api/asset-label"):
-        elif path in ("/api/assets/qr", "/api/asset-label"):
             with LOCK:
                 user = self.current_user()
                 if not user:
