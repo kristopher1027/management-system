@@ -337,3 +337,10 @@ Contributions, bug reports, and practical feature ideas are welcome. Before open
 **Repository:** [kristopher1027/management-system](https://github.com/kristopher1027/management-system)
 
 ResourceHub is built around a simple principle: **every resource should be visible, every handover should be accountable, and every team should have a clearer picture of what it manages.**
+
+
+```
+cd ~/management-system
+.venv/bin/python -m pip install "qrcode[pil]"
+.venv/bin/python web_app.py
+```

@@ -190,6 +190,25 @@ def init_db(seed_defaults=True):
             );
             CREATE INDEX IF NOT EXISTS asset_passport_event_asset
                 ON asset_passport_events(asset_tag, id);
+            CREATE TABLE IF NOT EXISTS maintenance_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_tag TEXT NOT NULL REFERENCES asset_passports(asset_tag) ON DELETE RESTRICT,
+                problem TEXT NOT NULL CHECK(length(problem) > 0 AND length(problem) <= 1000),
+                action_taken TEXT NOT NULL DEFAULT '',
+                cost REAL NOT NULL DEFAULT 0 CHECK(cost >= 0),
+                technician TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open'
+                    CHECK(status IN ('open','in_progress','completed','cancelled')),
+                reported_by TEXT NOT NULL DEFAULT '',
+                reported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS maintenance_asset_history
+                ON maintenance_records(asset_tag, id);
+            CREATE INDEX IF NOT EXISTS maintenance_status
+                ON maintenance_records(status);
         """)
         loan_schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='loans'").fetchone()[0]
         if "damaged" not in loan_schema:
@@ -1076,6 +1095,163 @@ def get_asset_passport(asset_tag):
                ORDER BY id DESC LIMIT 200""", (asset_tag,)
         ).fetchall()]
         return result
+
+
+
+
+MAINTENANCE_STATUSES = {"open", "in_progress", "completed", "cancelled"}
+
+
+def create_maintenance_record(
+    asset_tag, problem, action_taken="", cost=0, technician="",
+    status="open", reported_by=""
+):
+    """Create a repair record without changing inventory quantities."""
+    asset_tag = _asset_text(asset_tag, "Asset tag", 32)
+    problem = _asset_text(problem, "Problem", 1000)
+    action_taken = _asset_text(action_taken, "Action taken", 2000)
+    technician = _asset_text(technician, "Technician", 120)
+    reported_by = _asset_text(reported_by, "Reported by", 80)
+
+    if not problem:
+        return False, "Describe the problem."
+    if status not in MAINTENANCE_STATUSES:
+        return False, "Choose a valid maintenance status."
+    if isinstance(cost, bool):
+        return False, "Cost must be a non-negative number."
+    try:
+        cost = float(cost)
+    except (TypeError, ValueError):
+        return False, "Cost must be a non-negative number."
+    if not __import__("math").isfinite(cost) or cost < 0:
+        return False, "Cost must be a non-negative number."
+
+    with connect() as db:
+        asset = db.execute(
+            "SELECT asset_tag FROM asset_passports WHERE asset_tag=?",
+            (asset_tag,),
+        ).fetchone()
+        if not asset:
+            return False, "Asset passport not found."
+
+        completed_at = (
+            __import__("datetime").datetime.now().isoformat(timespec="seconds")
+            if status == "completed" else None
+        )
+        cursor = db.execute(
+            """INSERT INTO maintenance_records
+               (asset_tag,problem,action_taken,cost,technician,status,
+                reported_by,completed_at)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (asset_tag, problem, action_taken, cost, technician, status,
+             reported_by, completed_at),
+        )
+        detail = f"Maintenance #{cursor.lastrowid}: {problem} ({status})"
+        _asset_event(db, asset_tag, "maintenance", detail, reported_by)
+        record = db.execute(
+            "SELECT * FROM maintenance_records WHERE id=?",
+            (cursor.lastrowid,),
+        ).fetchone()
+        return True, "Maintenance record created.", dict(record)
+
+
+def list_maintenance_records(asset_tag=None, status=None):
+    """List maintenance records, optionally filtered by asset or status."""
+    if asset_tag is not None:
+        asset_tag = _asset_text(asset_tag, "Asset tag", 32)
+    if status is not None and status not in MAINTENANCE_STATUSES:
+        raise ValueError("Choose a valid maintenance status.")
+
+    query = "SELECT * FROM maintenance_records WHERE 1=1"
+    params = []
+    if asset_tag is not None:
+        query += " AND asset_tag=?"
+        params.append(asset_tag)
+    if status is not None:
+        query += " AND status=?"
+        params.append(status)
+    query += " ORDER BY id DESC"
+
+    with connect() as db:
+        return [
+            dict(row) for row in db.execute(query, params).fetchall()
+        ]
+
+
+def update_maintenance_record(
+    record_id, action_taken=None, cost=None, technician=None, status=None
+):
+    """Update a maintenance record and preserve its asset history."""
+    if isinstance(record_id, bool):
+        return False, "Invalid maintenance record ID."
+    try:
+        record_id = int(record_id)
+    except (TypeError, ValueError):
+        return False, "Invalid maintenance record ID."
+    if record_id < 1:
+        return False, "Invalid maintenance record ID."
+
+    values = {}
+    if action_taken is not None:
+        values["action_taken"] = _asset_text(action_taken, "Action taken", 2000)
+    if technician is not None:
+        values["technician"] = _asset_text(technician, "Technician", 120)
+    if cost is not None:
+        if isinstance(cost, bool):
+            return False, "Cost must be a non-negative number."
+        try:
+            cost = float(cost)
+        except (TypeError, ValueError):
+            return False, "Cost must be a non-negative number."
+        if not __import__("math").isfinite(cost) or cost < 0:
+            return False, "Cost must be a non-negative number."
+        values["cost"] = cost
+    if status is not None:
+        if status not in MAINTENANCE_STATUSES:
+            return False, "Choose a valid maintenance status."
+        values["status"] = status
+
+    if not values:
+        return False, "Provide at least one field to update."
+
+    with connect() as db:
+        current = db.execute(
+            "SELECT * FROM maintenance_records WHERE id=?", (record_id,)
+        ).fetchone()
+        if not current:
+            return False, "Maintenance record not found."
+
+        changed = [
+            (key, current[key], value)
+            for key, value in values.items()
+            if current[key] != value
+        ]
+        if not changed:
+            return True, "No changes were needed."
+
+        assignments = [f"{key}=?" for key, _, _ in changed]
+        params = [value for _, _, value in changed]
+        if any(key == "status" and value == "completed"
+               for key, _, value in changed):
+            assignments.append("completed_at=COALESCE(completed_at,CURRENT_TIMESTAMP)")
+        elif any(key == "status" and value != "completed"
+                 for key, _, value in changed):
+            assignments.append("completed_at=NULL")
+        assignments.append("updated_at=CURRENT_TIMESTAMP")
+        params.append(record_id)
+
+        db.execute(
+            f"UPDATE maintenance_records SET {', '.join(assignments)} WHERE id=?",
+            params,
+        )
+        summary = ", ".join(
+            f"{key}: {old!r} -> {new!r}" for key, old, new in changed
+        )
+        _asset_event(
+            db, current["asset_tag"], "maintenance_updated",
+            f"Maintenance #{record_id}: {summary}", "",
+        )
+        return True, "Maintenance record updated."
 
 
 def update_asset_passport(asset_tag, condition=None, location=None, status=None, notes=None, actor=""):
