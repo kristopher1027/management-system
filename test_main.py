@@ -89,9 +89,9 @@ class AssetPassportTests(unittest.TestCase):
         ok, _, asset = main.create_asset_passport("NOT-REAL")
         self.assertFalse(ok)
         self.assertIsNone(asset)
-        ok, _ = main.create_asset_passport("R001")
+        ok, _, valid_asset = main.create_asset_passport("R001")
         self.assertTrue(ok)
-        changed, message = main.update_asset_passport(asset_tag=main.list_asset_passports()[0]["asset_tag"], status="unknown")
+        changed, message = main.update_asset_passport(asset_tag=valid_asset["asset_tag"], status="unknown")
         self.assertFalse(changed)
         self.assertIn("status", message.lower())
 
