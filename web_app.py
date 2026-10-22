@@ -1,5 +1,8 @@
 """A small browser interface for the ResourceHub resource manager."""
 from copy import deepcopy
+from urllib.parse import parse_qs, urlsplit
+from html import escape
+from asset_labels import make_qr_png
 import csv
 import hashlib
 import hmac
@@ -800,7 +803,7 @@ dialog::backdrop{background:color-mix(in srgb,var(--ink) 52%,transparent);backdr
       try{
         const query=new URLSearchParams({q:$('#assetSearch').value});
         const result=await api('/api/assets?'+query.toString());
-        $('#assetRows').innerHTML=result.assets.length?result.assets.map(asset=>`<tr><td><strong>${esc(asset.asset_tag)}</strong></td><td><div class="resource-name">${esc(asset.resource_name)}</div><div class="resource-id">${esc(asset.resource_id)}</div></td><td>${esc(asset.serial_number||'—')}</td><td>${esc(asset.location||'—')}</td><td>${esc(asset.condition)}</td><td><span class="badge">${esc(asset.status)}</span></td><td><button class="btn secondary asset-history" data-tag="${esc(asset.asset_tag)}" type="button">View history</button></td></tr>`).join(''):'<tr><td colspan="7" class="empty">No asset passports yet. Register individually tracked equipment to begin its history.</td></tr>';
+        $('#assetRows').innerHTML=result.assets.length?result.assets.map(asset=>`<tr><td><strong>${esc(asset.asset_tag)}</strong></td><td><div class="resource-name">${esc(asset.resource_name)}</div><div class="resource-id">${esc(asset.resource_id)}</div></td><td>${esc(asset.serial_number||'—')}</td><td>${esc(asset.location||'—')}</td><td>${esc(asset.condition)}</td><td><span class="badge">${esc(asset.status)}</span></td><td><button class="btn secondary asset-history" data-tag="${esc(asset.asset_tag)}" type="button">View history</button>${currentRole==='owner'?'<button class="btn secondary asset-label" data-tag="'+esc(asset.asset_tag)+'" type="button">Print label</button>':''}</td></tr>`).join(''):'<tr><td colspan="7" class="empty">No asset passports yet. Register individually tracked equipment to begin its history.</td></tr>';
         $('#createAssetButton').hidden=currentRole!=='owner';
         message.textContent='';
       }catch(error){message.className='form-message error';message.textContent=error.message}
@@ -816,6 +819,12 @@ dialog::backdrop{background:color-mix(in srgb,var(--ink) 52%,transparent);backdr
       event.preventDefault();const message=$('#assetCreateMessage');message.className='form-message';message.textContent='';
       try{const result=await api('/api/assets',{resource_id:$('#assetResource').value,serial_number:$('#assetSerial').value,location:$('#assetLocation').value,condition:$('#assetCondition').value,notes:$('#assetNotes').value});$('#assetCreateDialog').close();event.target.reset();await loadAssetPassports();showToast(result.message)}
       catch(error){message.classList.add('error');message.textContent=error.message}
+    });
+    $('#assetRows').addEventListener('click', event => {
+      const button = event.target.closest('.asset-label');
+      if (!button) return;
+      const url = '/api/asset-label?tag=' + encodeURIComponent(button.dataset.tag);
+      window.open(url, '_blank', 'noopener');
     });
     $('#assetRows').addEventListener('click',async event=>{
       const button=event.target.closest('.asset-history');if(!button)return;
@@ -1142,6 +1151,65 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(401, {"error": "Please sign in to continue."})
                     return
                 self.respond(200, snapshot())
+        elif path in ("/api/assets/qr", "/api/asset-label"):
+        elif path in ("/api/assets/qr", "/api/asset-label"):
+            with LOCK:
+                user = self.current_user()
+                if not user:
+                    self.respond(401, {"error": "Please sign in to continue."})
+                    return
+                if user.get("role") != "owner":
+                    self.respond(403, {"error": "Owner access required."})
+                    return
+
+                query = parse_qs(urlsplit(self.path).query)
+                tag = query.get("tag", [""])[0].strip()
+                if not tag or len(tag) > 32:
+                    self.respond(400, {"error": "A valid asset tag is required."})
+                    return
+
+                try:
+                    asset = inventory.get_asset_passport(tag)
+                    if not asset:
+                        self.respond(404, {"error": "Asset passport not found."})
+                        return
+                    qr_png = make_qr_png(tag)
+                except ValueError:
+                    self.respond(400, {"error": "A valid asset tag is required."})
+                    return
+
+                if path == "/api/assets/qr":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(qr_png)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(qr_png)
+                    return
+
+                safe_tag = escape(tag, quote=True)
+                safe_name = escape(
+                    str(asset.get("resource_name") or asset.get("resource_id") or ""),
+                    quote=True,
+                )
+                page = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ResourceHub asset label - {safe_tag}</title>
+<style>
+body{{font-family:Arial,sans-serif;margin:0;padding:24px;color:#111}}
+.label{{width:320px;max-width:100%;border:1px solid #222;padding:16px;text-align:center}}
+img{{width:180px;height:180px;display:block;margin:12px auto}}
+.tag{{font-size:22px;font-weight:bold;overflow-wrap:anywhere}}
+.name{{font-size:14px;margin-top:8px}}
+@media print{{@page{{margin:8mm}}body{{padding:0}}.no-print{{display:none}}.label{{break-inside:avoid}}}}
+</style></head><body>
+<div class="label"><strong>ResourceHub</strong>
+<img alt="QR code for asset {safe_tag}" src="/api/assets/qr?tag={safe_tag}">
+<div class="tag">{safe_tag}</div><div class="name">{safe_name}</div></div>
+<p class="no-print"><button onclick="window.print()">Print label</button></p>
+</body></html>""".encode("utf-8")
+                self.respond(200, page, "text/html; charset=utf-8")
         elif path == "/api/assets":
             with LOCK:
                 username = self.current_user()
