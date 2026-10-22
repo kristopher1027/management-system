@@ -159,6 +159,38 @@ def init_db(seed_defaults=True):
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )""")
         db.execute("CREATE INDEX IF NOT EXISTS sale_payment_sale ON sale_payments(sale_id)")
+
+        # Individual asset passports sit alongside quantity-based inventory.
+        # Creating a passport never changes resources.total or stock availability.
+        db.executescript("""
+            CREATE TABLE IF NOT EXISTS asset_passports (
+                asset_tag TEXT PRIMARY KEY,
+                resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE RESTRICT,
+                serial_number TEXT NOT NULL DEFAULT '',
+                condition TEXT NOT NULL DEFAULT 'good'
+                    CHECK(condition IN ('good','fair','poor','damaged')),
+                location TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'available'
+                    CHECK(status IN ('available','assigned','maintenance','retired')),
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS asset_passport_resource
+                ON asset_passports(resource_id);
+            CREATE INDEX IF NOT EXISTS asset_passport_status
+                ON asset_passports(status);
+            CREATE TABLE IF NOT EXISTS asset_passport_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_tag TEXT NOT NULL REFERENCES asset_passports(asset_tag) ON DELETE CASCADE,
+                event_type TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                actor TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS asset_passport_event_asset
+                ON asset_passport_events(asset_tag, id);
+        """)
         loan_schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='loans'").fetchone()[0]
         if "damaged" not in loan_schema:
             db.executescript("""
@@ -957,6 +989,133 @@ def menu():
             print(return_item(fid, rid, qty, damaged=True)[1])
         elif choice == "0": print("Goodbye!"); break
         else: print("Invalid option. Please choose 0-13.")
+
+
+
+
+ASSET_CONDITIONS = {"good", "fair", "poor", "damaged"}
+ASSET_STATUSES = {"available", "assigned", "maintenance", "retired"}
+
+
+def _asset_text(value, field, limit):
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be text.")
+    value = value.strip()
+    if len(value) > limit:
+        raise ValueError(f"{field} must be {limit} characters or fewer.")
+    return value
+
+
+def _asset_event(db, asset_tag, event_type, detail, actor):
+    db.execute(
+        "INSERT INTO asset_passport_events(asset_tag,event_type,detail,actor) VALUES(?,?,?,?)",
+        (asset_tag, event_type[:40], detail[:400], actor[:80]),
+    )
+
+
+def create_asset_passport(resource_id, serial_number="", location="", condition="good", notes="", actor=""):
+    """Create a uniquely tagged individual asset without changing aggregate stock."""
+    resource_id = _asset_text(resource_id, "Resource ID", 80)
+    serial_number = _asset_text(serial_number, "Serial number", 120)
+    location = _asset_text(location, "Location", 120)
+    notes = _asset_text(notes, "Notes", 1000)
+    actor = _asset_text(actor, "Actor", 80)
+    if condition not in ASSET_CONDITIONS:
+        return False, "Choose a valid asset condition.", None
+    with connect() as db:
+        if not db.execute("SELECT 1 FROM resources WHERE id=?", (resource_id,)).fetchone():
+            return False, "Choose an existing inventory resource.", None
+        asset_tag = "RH-" + __import__("uuid").uuid4().hex[:12].upper()
+        db.execute(
+            """INSERT INTO asset_passports
+               (asset_tag,resource_id,serial_number,condition,location,notes)
+               VALUES(?,?,?,?,?,?)""",
+            (asset_tag, resource_id, serial_number, condition, location, notes),
+        )
+        _asset_event(db, asset_tag, "created", "Asset passport created", actor)
+        row = db.execute(
+            """SELECT a.*, r.name AS resource_name
+               FROM asset_passports a JOIN resources r ON r.id=a.resource_id
+               WHERE a.asset_tag=?""", (asset_tag,)
+        ).fetchone()
+        return True, "Asset passport created. Inventory quantities were not changed.", dict(row)
+
+
+def list_asset_passports(search_text=""):
+    """List individual asset passports for the currently active shop database."""
+    search_text = _asset_text(search_text, "Search", 120)
+    term = "%" + search_text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    with connect() as db:
+        rows = db.execute(
+            """SELECT a.*, r.name AS resource_name
+               FROM asset_passports a JOIN resources r ON r.id=a.resource_id
+               WHERE ?='' OR a.asset_tag LIKE ? ESCAPE '\\'
+                  OR a.serial_number LIKE ? ESCAPE '\\'
+                  OR r.name LIKE ? ESCAPE '\\' OR a.location LIKE ? ESCAPE '\\'
+               ORDER BY a.created_at DESC, a.asset_tag""",
+            (search_text, term, term, term, term),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_asset_passport(asset_tag):
+    """Return one asset passport and its chronological event history."""
+    asset_tag = _asset_text(asset_tag, "Asset tag", 32)
+    with connect() as db:
+        row = db.execute(
+            """SELECT a.*, r.name AS resource_name, r.category AS resource_category
+               FROM asset_passports a JOIN resources r ON r.id=a.resource_id
+               WHERE a.asset_tag=?""", (asset_tag,)
+        ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["events"] = [dict(event) for event in db.execute(
+            """SELECT id,event_type,detail,actor,created_at
+               FROM asset_passport_events WHERE asset_tag=?
+               ORDER BY id DESC LIMIT 200""", (asset_tag,)
+        ).fetchall()]
+        return result
+
+
+def update_asset_passport(asset_tag, condition=None, location=None, status=None, notes=None, actor=""):
+    """Update passport fields and record every actual change in the asset history."""
+    asset_tag = _asset_text(asset_tag, "Asset tag", 32)
+    actor = _asset_text(actor, "Actor", 80)
+    values = {}
+    if condition is not None:
+        if condition not in ASSET_CONDITIONS:
+            return False, "Choose a valid asset condition."
+        values["condition"] = condition
+    if status is not None:
+        if status not in ASSET_STATUSES:
+            return False, "Choose a valid asset status."
+        values["status"] = status
+    if location is not None:
+        values["location"] = _asset_text(location, "Location", 120)
+    if notes is not None:
+        values["notes"] = _asset_text(notes, "Notes", 1000)
+    if not values:
+        return False, "Provide at least one field to update."
+    with connect() as db:
+        current = db.execute(
+            "SELECT * FROM asset_passports WHERE asset_tag=?", (asset_tag,)
+        ).fetchone()
+        if not current:
+            return False, "Asset passport not found."
+        changed = [(key, current[key], value) for key, value in values.items()
+                   if current[key] != value]
+        if not changed:
+            return True, "No changes were needed."
+        assignments = ", ".join(f"{key}=?" for key, _, _ in changed)
+        db.execute(
+            f"UPDATE asset_passports SET {assignments}, updated_at=CURRENT_TIMESTAMP WHERE asset_tag=?",
+            [value for _, _, value in changed] + [asset_tag],
+        )
+        for key, old, new in changed:
+            _asset_event(db, asset_tag, key, f"{key}: {old or '(empty)'} → {new or '(empty)'}", actor)
+    return True, "Asset passport updated."
+
 
 
 if __name__ == "__main__":
