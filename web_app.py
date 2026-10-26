@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlsplit
 from html import escape
 from asset_labels import make_qr_png
 import csv
+import fcntl
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2267,9 +2268,22 @@ img{{width:180px;height:180px;display:block;margin:12px auto}}
 
 
 def main():
-    
     inventory.load_data()
     load_users()
+
+    # Enforce one process per data directory. The whole design assumes
+    # a single writer: in-memory users/sessions, mutable DB_FILE, and
+    # auth.json written whole. Two processes would silently corrupt state.
+    lock_path = os.path.join(inventory.DATA_DIR, ".resourcehub.lock")
+    lock_handle = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"Another ResourceHub instance is already using {inventory.DATA_DIR}.")
+        print("Stop it first, or set RESOURCEHUB_DATA_DIR to a different directory.")
+        lock_handle.close()
+        raise SystemExit(1)
+
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"ResourceHub is running at http://{HOST}:{PORT}")
     print("Press Ctrl+C to stop the server.")
@@ -2279,7 +2293,8 @@ def main():
         print("\nStopping ResourceHub...")
     finally:
         server.server_close()
-
+        fcntl.flock(lock_handle, fcntl.LOCK_UN)
+        lock_handle.close()
 
 if __name__ == "__main__":
     main()
