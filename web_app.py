@@ -202,7 +202,7 @@ def create_shop_database(shop_id, shop_name, phone, email):
     finally:
         inventory.DB_FILE, inventory.BACKUP_DIR = previous_db, previous_backup
         inventory.refresh_state()
-        
+
 
 def smtp_settings():
     """Read and validate the SMTP settings from the environment."""
@@ -2115,9 +2115,8 @@ img{{width:180px;height:180px;display:block;margin:12px auto}}
             self.respond(200, {"message": "Test email sent successfully. Check the recipient inbox."})
         except ValueError as error:
             self.respond(400, {"error": str(error)})
-        except (OSError, RuntimeError, smtplib.SMTPException, ValueError):
+        except (OSError, RuntimeError, smtplib.SMTPException):
             self.respond(503, {"error": "Email test failed. Check your SMTP settings in .env."})
-
     def handle_shop_settings(self):
         try:
             data = self.read_json(max_bytes=400_000)
