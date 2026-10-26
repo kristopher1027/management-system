@@ -184,25 +184,25 @@ def activate_shop(shop_id, allow_create=False):
         inventory.BACKUP_DIR = previous_backup
         raise
 def create_shop_database(shop_id, shop_name, phone, email):
-    """Create an empty tenant database without the demo inventory."""
+    """Create an empty tenant database without the demo inventory.
+    Atomic: if any step fails, the shop folder is removed."""
     previous_db, previous_backup = inventory.DB_FILE, inventory.BACKUP_DIR
+    shop_dir = os.path.join(TENANT_DIR, shop_id)
     try:
         activate_shop(shop_id, allow_create=True)
-        inventory.init_db()
+        inventory.init_db(seed_defaults=False)
         INITIALIZED_SHOPS.add(shop_id)
         with inventory.connect() as db:
-            db.execute("DELETE FROM loans")
-            db.execute("DELETE FROM sales")
-            db.execute("DELETE FROM stock_movements")
-            db.execute("DELETE FROM stock_adjustments")
-            db.execute("DELETE FROM resources")
-            db.execute("DELETE FROM fellows")
             db.execute("UPDATE shop_settings SET shop_name=? WHERE id=1", (shop_name,))
         inventory.refresh_state()
+    except Exception:
+        if os.path.isdir(shop_dir):
+            shutil.rmtree(shop_dir, ignore_errors=True)
+        raise
     finally:
         inventory.DB_FILE, inventory.BACKUP_DIR = previous_db, previous_backup
         inventory.refresh_state()
-
+        
 
 def smtp_settings():
     """Read and validate the SMTP settings from the environment."""
