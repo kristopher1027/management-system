@@ -32,9 +32,9 @@ borrow_records = []
 def connect():
     db = sqlite3.connect(DB_FILE, timeout=30)
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode = WAL")
     db.execute("PRAGMA foreign_keys = ON")
     return db
-
 
 def backup_database():
     """Keep an atomic daily SQLite snapshot, refreshing it before later changes."""
