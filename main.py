@@ -1295,5 +1295,5 @@ def update_asset_passport(asset_tag, condition=None, location=None, status=None,
 
 
 if __name__ == "__main__":
-    load_data()
-    menu()
+    print("main.py is the ResourceHub library. Start the web app with:")
+    print("    python3 web_app.py")
