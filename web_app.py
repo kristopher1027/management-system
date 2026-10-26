@@ -149,6 +149,11 @@ def activate_shop(shop_id, allow_create=False):
     if shop_id != "default" and not re.fullmatch(r"[a-f0-9]{16}", str(shop_id)):
         raise RuntimeError("Invalid shop account configuration.")
 
+    # Ensure the tenant root exists before any per-shop path is built.
+    # create_shop_database() calls this with allow_create=True; if the root
+    # itself is missing, os.makedirs() below would create only the leaf.
+    os.makedirs(TENANT_DIR, exist_ok=True)
+
     if shop_id == "default":
         db_file = os.path.join(inventory.DATA_DIR, "campus_resources.db")
         backup_dir = ROOT_BACKUP_DIR
@@ -202,7 +207,11 @@ def create_shop_database(shop_id, shop_name, phone, email):
         raise
     finally:
         inventory.DB_FILE, inventory.BACKUP_DIR = previous_db, previous_backup
-        inventory.refresh_state()
+        # Only refresh if the restored DB_FILE is still on disk. If the
+        # tenant folder was just removed, refreshing would raise a second
+        # sqlite3.OperationalError that masks the original failure.
+        if os.path.isfile(inventory.DB_FILE):
+            inventory.refresh_state()
 
 
 def smtp_settings():
@@ -1198,6 +1207,10 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "ResourceHub/1.0"
 
     def respond(self, status, payload, content_type="application/json; charset=utf-8", headers=None):
+        if payload is None or payload == b"" or payload == "":
+            payload = {"error": "No response body was produced."} if "json" in content_type else " "
+        if payload is None or payload == b"" or payload == "":
+            payload = {"error": "No response body was produced."} if "json" in content_type else " "
         body = payload if isinstance(payload, bytes) else payload.encode("utf-8") if isinstance(payload, str) else json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
