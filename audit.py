@@ -41,7 +41,7 @@ def record(inventory, actor, role, action, target="", detail="", ip=""):
                  str(target)[:100], str(detail)[:400], str(ip)[:64]),
             )
         return True
-        except sqlite3.Error:
+    except sqlite3.Error:
         # Best-effort: a logging failure must never undo the business action.
         # The caller can inspect the return value; tests don't need stderr noise.
         return False
@@ -111,3 +111,4 @@ def describe_item_changes(before_resources, data):
         if field in data and not _same(old.get(field), data[field]):
             changes.append(f"{field}: {old.get(field)} → {data[field]}")
     return "; ".join(changes)
+    
