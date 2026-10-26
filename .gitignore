@@ -1,18 +1,12 @@
+.env
 .venv/
 __pycache__/
-*.py[cod]
-.env
-*.db
-backups/
+*.pyc
 auth.json
-report.csv
-data.json
-*.sqlite3
-*.sqlite
-data.json
-*.sqlite3
-*.sqlite
+*.db
 
-web_app.py.bak
-__pycache__/
+*.sqlite3
+*.zip
+backups/
+shops/
 .resourcehub.lock
