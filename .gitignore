@@ -15,3 +15,4 @@ data.json
 
 web_app.py.bak
 __pycache__/
+.resourcehub.lock
