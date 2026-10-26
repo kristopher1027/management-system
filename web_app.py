@@ -216,6 +216,8 @@ def create_shop_database(shop_id, shop_name, phone, email):
 
 def smtp_settings():
     """Read and validate the SMTP settings from the environment."""
+    if LOCAL_DEVELOPMENT and os.environ.get("RESOURCEHUB_SMTP_DEV", "0") == "1":
+        return ("dev", 0, "dev@localhost", "dev", "dev")
     host = os.environ.get("RESOURCEHUB_SMTP_HOST", "smtp.gmail.com").strip()
     sender = os.environ.get("RESOURCEHUB_SMTP_FROM", "")
     password = os.environ.get("RESOURCEHUB_SMTP_PASSWORD", "").replace(" ", "")
@@ -273,6 +275,8 @@ def send_test_email(email):
 
 
 def verify_turnstile(token, remote_ip):
+    if LOCAL_DEVELOPMENT and os.environ.get("RESOURCEHUB_TURNSTILE_DEV", "0") == "1":
+        return True
     secret = os.environ.get(
         "TURNSTILE_SECRET_KEY", "1x0000000000000000000000000000000AA" if LOCAL_DEVELOPMENT else "")
     if not secret:

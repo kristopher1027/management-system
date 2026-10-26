@@ -10,3 +10,5 @@ auth.json
 backups/
 shops/
 .resourcehub.lock
+*.bak
+*.new
